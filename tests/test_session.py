@@ -1,4 +1,4 @@
-"""Session state v2: phases, interview transitions, handoff, and the data contracts."""
+"""Session state v3: phases, interview and portrait transitions, handoff, data contracts."""
 
 import pytest
 from pydantic import ValidationError
@@ -34,7 +34,7 @@ def interviewing(store: SessionStore, chat_id: int = 1) -> SessionStore:
 def test_new_chat_starts_awaiting_photo_with_empty_state() -> None:
     session = SessionStore().get(1)
     assert session == Session(chat_id=1)
-    assert session.schema_version == 2
+    assert session.schema_version == 3
     assert session.phase is Phase.AWAITING_PHOTO
     assert session.photo is None
     assert session.transcript == ()
@@ -132,6 +132,48 @@ def test_reset_is_idempotent_and_harmless_for_unknown_chats() -> None:
     store.reset(999)
     store.reset(999)
     assert store.get(999).phase is Phase.AWAITING_PHOTO
+
+
+# --- Portrait delivery -------------------------------------------------------------------
+
+
+def completed(store: SessionStore, chat_id: int = 1) -> SessionStore:
+    interviewing(store, chat_id)
+    store.complete_interview(chat_id, "Mugs.", DOSSIER)
+    return store
+
+
+def test_deliver_portrait_after_completion() -> None:
+    store = completed(SessionStore())
+    session = store.deliver_portrait(1)
+    assert session.phase is Phase.PORTRAIT_DELIVERED
+    assert session.dossier == DOSSIER
+    assert store.get(1) == session
+
+
+@pytest.mark.parametrize("setup", ["fresh", "interviewing", "delivered"])
+def test_deliver_portrait_from_wrong_phase_is_invalid(setup: str) -> None:
+    store = SessionStore()
+    if setup == "interviewing":
+        interviewing(store)
+    elif setup == "delivered":
+        completed(store).deliver_portrait(1)
+    with pytest.raises(InvalidTransition):
+        store.deliver_portrait(1)
+
+
+def test_new_interview_can_start_after_delivery() -> None:
+    store = completed(SessionStore())
+    store.deliver_portrait(1)
+    session = store.start_interview(1, PHOTO, "Fresh?")
+    assert session.phase is Phase.INTERVIEWING
+    assert session.dossier is None
+
+
+def test_handoff_still_available_after_delivery() -> None:
+    store = completed(SessionStore())
+    store.deliver_portrait(1)
+    assert store.get(1).handoff() == InterviewHandoff(photo=PHOTO, dossier=DOSSIER)
 
 
 # --- Handoff -------------------------------------------------------------------------------

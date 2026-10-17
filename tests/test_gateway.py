@@ -1,4 +1,4 @@
-"""Gateway routing: Bouncer gate, then a one-question-per-turn interview, then the finale."""
+"""Gateway routing: Bouncer gate, one-question-per-turn interview, finale, hybrid portrait."""
 
 import logging
 from collections.abc import Sequence
@@ -12,9 +12,10 @@ from telegram.ext import Application, BaseHandler
 
 from telegram_documentaries import gateway
 from telegram_documentaries.bouncer import BouncerError, BouncerVerdict
+from telegram_documentaries.converter import ConverterError
 from telegram_documentaries.gateway import DEPS_KEY, Deps, build_application
 from telegram_documentaries.interviewer import InterviewerError, NextQuestion
-from telegram_documentaries.media import MAX_IMAGE_BYTES, ImageInput
+from telegram_documentaries.media import MAX_IMAGE_BYTES, ImageInput, PortraitImage
 from telegram_documentaries.session import QA, Dossier, InterviewHandoff, Phase, SessionStore
 
 FAKE_TOKEN = "123456789:AAH-fake-token-for-tests"
@@ -69,6 +70,24 @@ class FakeInterviewer:
         return step
 
 
+class FakeConverter:
+    """Returns scripted portraits or errors; records every handoff it received."""
+
+    def __init__(self, *results: PortraitImage | Exception) -> None:
+        self.results = list(results) or [PORTRAIT]
+        self.handoffs: list[InterviewHandoff] = []
+
+    async def convert(self, handoff: InterviewHandoff) -> PortraitImage:
+        self.handoffs.append(handoff)
+        result = self.results.pop(0)
+        if isinstance(result, Exception):
+            raise result
+        return result
+
+
+PORTRAIT = PortraitImage(data=b"\x89PNG-hybrid", mime_type="image/png")
+
+
 def ask(question: str) -> NextQuestion:
     return NextQuestion(question=question, enough_information=False)
 
@@ -92,6 +111,7 @@ def fake_message(
 ) -> MagicMock:
     message = MagicMock()
     message.reply_text = AsyncMock()
+    message.reply_photo = AsyncMock()
     message.text = text
     message.photo = ()
     message.document = None
@@ -118,11 +138,14 @@ def fake_update(message: MagicMock | None, chat_id: int = 42) -> MagicMock:
 
 
 def make_deps(
-    bouncer: FakeBouncer | None = None, interviewer: FakeInterviewer | None = None
+    bouncer: FakeBouncer | None = None,
+    interviewer: FakeInterviewer | None = None,
+    converter: FakeConverter | None = None,
 ) -> Deps:
     return Deps(
         bouncer=bouncer or FakeBouncer(),
         interviewer=interviewer or FakeInterviewer(),
+        converter=converter or FakeConverter(),
         sessions=SessionStore(),
     )
 
@@ -213,12 +236,13 @@ async def test_answer_is_recorded_and_next_question_sent() -> None:
     assert session.pending_question == "Q2?"
 
 
-async def test_full_interview_resumes_across_messages_and_hands_off(
+async def test_full_interview_resumes_across_messages_and_delivers_portrait(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     caplog.set_level(logging.INFO, logger="telegram_documentaries")
     interviewer = FakeInterviewer("Q1?", ask("Q2?"), ask("Q3?"), ask("Q4?"), ask("Q5?"), DOSSIER)
-    deps = make_deps(FakeBouncer(HUMAN), interviewer)
+    converter = FakeConverter(PORTRAIT)
+    deps = make_deps(FakeBouncer(HUMAN), interviewer, converter)
     await send_photo(deps)
 
     for n in range(1, 5):
@@ -227,17 +251,35 @@ async def test_full_interview_resumes_across_messages_and_hands_off(
         assert len(deps.sessions.get(42).transcript) == n
 
     finale = await send_text(deps, "Answer 5")
-    reply = replied(finale)
-    assert reply == gateway.format_finale(DOSSIER)
-    for expected in (DOSSIER.profile, "hums while thinking", "raccoon", "being developed"):
-        assert expected in reply
+    texts = replies(finale)
+    assert texts == [gateway.format_finale(DOSSIER), gateway.NARRATION_COMING_SOON]
+    for expected in (DOSSIER.profile, "hums while thinking", "raccoon", "Developing"):
+        assert expected in texts[0]
+
+    finale.reply_photo.assert_awaited_once_with(
+        photo=PORTRAIT.data,
+        caption=gateway.format_caption(DOSSIER),
+        write_timeout=gateway.PHOTO_UPLOAD_TIMEOUT_S,
+        read_timeout=gateway.PHOTO_UPLOAD_TIMEOUT_S,
+    )
+    assert converter.handoffs == [InterviewHandoff(photo=PHOTO, dossier=DOSSIER)]
 
     session = deps.sessions.get(42)
-    assert session.phase is Phase.INTERVIEW_COMPLETE
+    assert session.phase is Phase.PORTRAIT_DELIVERED
     assert [qa.answer for qa in session.transcript] == [f"Answer {n}" for n in range(1, 6)]
-    assert session.handoff() == InterviewHandoff(photo=PHOTO, dossier=DOSSIER)
     assert "event=interview_handoff_ready chat_id=42" in caplog.text
-    assert "animal='raccoon'" in caplog.text
+    assert "event=portrait_delivered chat_id=42 animal='raccoon'" in caplog.text
+    assert "PNG-hybrid" not in caplog.text  # portrait bytes never logged
+
+
+def test_photo_upload_allows_time_for_large_portraits() -> None:
+    # python-telegram-bot defaults to 5 s, which large generated images exceed: the photo
+    # arrives but the bot times out and the session wrongly stays undelivered.
+    assert gateway.PHOTO_UPLOAD_TIMEOUT_S >= 60
+
+
+def test_caption_names_the_animal() -> None:
+    assert gateway.format_caption(DOSSIER) == "📸 Exhibit A: Homo sapiens × raccoon"
 
 
 # --- Wrong input mid-interview: nudge, no state change -----------------------------------
@@ -287,23 +329,75 @@ async def test_interviewer_failure_does_not_record_and_retry_works() -> None:
     assert len(deps.sessions.get(42).transcript) == 1
 
 
-# --- After the interview ----------------------------------------------------------------------
+# --- Portrait: failure, retry, afterwards ---------------------------------------------------
 
 
-async def test_text_after_completion_gets_in_progress_reply() -> None:
-    deps = interviewing(make_deps(), "Q1?")
+def completed(deps: Deps) -> Deps:
+    interviewing(deps, "Q1?")
     deps.sessions.complete_interview(42, "A1", DOSSIER)
+    return deps
+
+
+async def test_converter_failure_keeps_results_and_invites_retry(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    converter = FakeConverter(ConverterError("model returned no image"))
+    deps = interviewing(make_deps(interviewer=FakeInterviewer("Q1?", DOSSIER), converter=converter))
+    message = await send_text(deps, "Final answer")
+
+    assert replies(message) == [gateway.format_finale(DOSSIER), gateway.CONVERTER_FAILED]
+    message.reply_photo.assert_not_awaited()
+    session = deps.sessions.get(42)
+    assert session.phase is Phase.INTERVIEW_COMPLETE
+    assert session.dossier == DOSSIER
+    assert "event=converter_failed chat_id=42" in caplog.text
+
+
+async def test_any_text_after_failure_retries_the_portrait() -> None:
+    converter = FakeConverter(PORTRAIT)
+    deps = completed(make_deps(converter=converter))
+    message = await send_text(deps, "try again please")
+
+    assert replies(message) == [gateway.RETRYING_PORTRAIT, gateway.NARRATION_COMING_SOON]
+    message.reply_photo.assert_awaited_once()
+    assert len(converter.handoffs) == 1
+    assert deps.sessions.get(42).phase is Phase.PORTRAIT_DELIVERED
+
+
+async def test_failed_retry_stays_retryable() -> None:
+    deps = completed(make_deps(converter=FakeConverter(ConverterError("timed out"))))
+    message = await send_text(deps, "again")
+    assert replies(message) == [gateway.RETRYING_PORTRAIT, gateway.CONVERTER_FAILED]
+    assert deps.sessions.get(42).phase is Phase.INTERVIEW_COMPLETE
+
+
+async def test_telegram_send_failure_leaves_portrait_retryable() -> None:
+    deps = completed(make_deps())
+    message = fake_message(text="again")
+    message.reply_photo = AsyncMock(side_effect=NetworkError("upload failed"))
+    with pytest.raises(NetworkError):  # the application's error handler logs it
+        await gateway.on_other(fake_update(message), make_context(deps))
+    assert deps.sessions.get(42).phase is Phase.INTERVIEW_COMPLETE
+
+
+async def test_text_after_delivery_gets_coming_soon_reply() -> None:
+    converter = FakeConverter()
+    deps = completed(make_deps(converter=converter))
+    deps.sessions.deliver_portrait(42)
     message = await send_text(deps, "hello?")
-    assert replied(message) == gateway.PORTRAIT_IN_PROGRESS
+    assert replied(message) == gateway.NARRATION_COMING_SOON
+    assert converter.handoffs == []
 
 
-async def test_new_photo_after_completion_starts_fresh_interview() -> None:
-    deps = interviewing(make_deps(interviewer=FakeInterviewer("Fresh Q?")), "Q1?")
-    deps.sessions.complete_interview(42, "A1", DOSSIER)
+@pytest.mark.parametrize("delivered", [False, True])
+async def test_new_photo_after_interview_starts_fresh(delivered: bool) -> None:
+    deps = completed(make_deps(interviewer=FakeInterviewer("Fresh Q?")))
+    if delivered:
+        deps.sessions.deliver_portrait(42)
     message = await send_photo(deps)
     assert replies(message)[-1] == gateway.format_question(1, "Fresh Q?")
     session = deps.sessions.get(42)
-    assert session.transcript == ()
+    assert session.phase is Phase.INTERVIEWING
     assert session.dossier is None
 
 

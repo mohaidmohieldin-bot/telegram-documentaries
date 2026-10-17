@@ -22,6 +22,7 @@ class Phase(StrEnum):
     AWAITING_PHOTO = "awaiting_photo"
     INTERVIEWING = "interviewing"
     INTERVIEW_COMPLETE = "interview_complete"
+    PORTRAIT_DELIVERED = "portrait_delivered"
 
 
 class InvalidTransition(Exception):
@@ -70,7 +71,7 @@ class Session(BaseModel):
 
     model_config = ConfigDict(frozen=True, strict=True)
 
-    schema_version: Literal[2] = 2
+    schema_version: Literal[3] = 3
     chat_id: int
     phase: Phase = Phase.AWAITING_PHOTO
     photo: ImageInput | None = None
@@ -79,7 +80,8 @@ class Session(BaseModel):
     dossier: Dossier | None = None
 
     def handoff(self) -> InterviewHandoff:
-        if self.phase is not Phase.INTERVIEW_COMPLETE or not self.photo or not self.dossier:
+        completed = self.phase in (Phase.INTERVIEW_COMPLETE, Phase.PORTRAIT_DELIVERED)
+        if not completed or not self.photo or not self.dossier:
             raise InvalidTransition(f"chat {self.chat_id}: no completed interview to hand off")
         return InterviewHandoff(photo=self.photo, dossier=self.dossier)
 
@@ -98,7 +100,9 @@ class SessionStore:
 
     def start_interview(self, chat_id: int, photo: ImageInput, first_question: str) -> Session:
         current = self.get(chat_id)
-        self._require(current, Phase.AWAITING_PHOTO, Phase.INTERVIEW_COMPLETE)
+        self._require(
+            current, Phase.AWAITING_PHOTO, Phase.INTERVIEW_COMPLETE, Phase.PORTRAIT_DELIVERED
+        )
         return self._save(
             Session(
                 chat_id=chat_id,
@@ -128,6 +132,11 @@ class SessionStore:
                 }
             )
         )
+
+    def deliver_portrait(self, chat_id: int) -> Session:
+        current = self.get(chat_id)
+        self._require(current, Phase.INTERVIEW_COMPLETE)
+        return self._save(current.model_copy(update={"phase": Phase.PORTRAIT_DELIVERED}))
 
     def _answered(self, current: Session, answer: str) -> tuple[QA, ...]:
         self._require(current, Phase.INTERVIEWING)
