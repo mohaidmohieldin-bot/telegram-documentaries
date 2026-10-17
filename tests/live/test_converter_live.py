@@ -37,7 +37,8 @@ def gemini_credentials() -> None:
 
 async def test_person_photo_becomes_a_hybrid_portrait() -> None:
     photo: ImageInput = load_image("person.jpg")
-    portrait = await create_converter().convert(InterviewHandoff(photo=photo, dossier=DOSSIER))
+    handoff = InterviewHandoff(photo=photo, dossier=DOSSIER, transcript=())
+    portrait = await create_converter().convert(handoff)
 
     assert len(portrait.data) > 10_000  # a real image, not a stub
     OUTPUT.mkdir(exist_ok=True)
