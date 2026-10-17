@@ -58,4 +58,4 @@ def test_sessions_are_immutable() -> None:
 def test_chat_id_must_be_an_integer() -> None:
     # A str/int mismatch would silently split one user into two sessions.
     with pytest.raises(ValidationError):
-        Session(chat_id="1")
+        Session(chat_id="1")  # type: ignore[arg-type]

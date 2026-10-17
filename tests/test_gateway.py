@@ -256,7 +256,7 @@ def real_message(**kwargs: object) -> Message:
 
 def matching_callbacks(app: Application, update: Update) -> list[object]:  # type: ignore[type-arg]
     """Callbacks of the handlers that would receive this update (first match per group)."""
-    callbacks = []
+    callbacks: list[object] = []
     for group in app.handlers.values():
         handler: BaseHandler  # type: ignore[type-arg]
         for handler in group:
