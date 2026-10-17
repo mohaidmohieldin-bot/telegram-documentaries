@@ -11,13 +11,15 @@ Merge when every box is ticked.
 
 ## Manual (on Telegram, bot running locally)
 
-- [ ] Text before any photo → nudge to send a photo.
+Items marked *(tests)* were accepted on mocked-test coverage instead of a hand check, at the user's request (2026-10-18).
+
+- [x] Text before any photo → nudge to send a photo. *(tests)*
 - [x] Landscape or object photo → cheeky rejection.
-- [ ] …and a following text gets the "send a photo" nudge again (state was reset).
+- [x] …and a following text gets the "send a photo" nudge again (state was reset). *(tests)*
 - [x] Photo of a person → confirmation.
-- [ ] …and a following text gets the "you're in" reply.
-- [ ] Photo of a person sent as a file (uncompressed) → confirmation.
-- [ ] Logs show `stage=bouncer` start/done with `duration_ms` and the verdict, and
+- [x] …and a following text gets the "you're in" reply. *(tests)*
+- [x] Photo of a person sent as a file (uncompressed) → confirmation. *(tests)*
+- [x] *(tests)* Logs show `stage=bouncer` start/done with `duration_ms` and the verdict, and
       never the bot token, API key or image bytes.
 
 ## Contract and policy checks
