@@ -36,7 +36,7 @@ and all scripts pass.
 session resets; tests cover both with the model mocked.
 **Serves:** rejection criterion.
 
-## Phase 3 — Interviewer `[ ]`
+## Phase 3 — Interviewer `[x]`
 
 - Asks 5–7 questions, one at a time, storing each answer in the `chat_id`'s
   dossier.

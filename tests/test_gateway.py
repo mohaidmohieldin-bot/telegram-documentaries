@@ -1,6 +1,7 @@
-"""Gateway routing: photos go to the Bouncer, everything else gets a phase-based reply."""
+"""Gateway routing: Bouncer gate, then a one-question-per-turn interview, then the finale."""
 
 import logging
+from collections.abc import Sequence
 from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock
 
@@ -12,14 +13,22 @@ from telegram.ext import Application, BaseHandler
 from telegram_documentaries import gateway
 from telegram_documentaries.bouncer import BouncerError, BouncerVerdict
 from telegram_documentaries.gateway import DEPS_KEY, Deps, build_application
+from telegram_documentaries.interviewer import InterviewerError, NextQuestion
 from telegram_documentaries.media import MAX_IMAGE_BYTES, ImageInput
-from telegram_documentaries.session import Phase, SessionStore
+from telegram_documentaries.session import QA, Dossier, InterviewHandoff, Phase, SessionStore
 
 FAKE_TOKEN = "123456789:AAH-fake-token-for-tests"
 PHOTO_BYTES = b"\xff\xd8person-or-landscape"
+PHOTO = ImageInput(data=PHOTO_BYTES, mime_type="image/jpeg")
 
 HUMAN = BouncerVerdict(human_present=True, reason="A person smiling.")
 NO_HUMAN = BouncerVerdict(human_present=False, reason="A mountain landscape.")
+DOSSIER = Dossier(
+    profile="A nocturnal snack strategist who alphabetises spices.",
+    quirks=("hums while thinking", "collects mugs"),
+    suggested_animal="raccoon",
+    animal_rationale="Night-time foraging and a love of shiny things.",
+)
 
 
 class FakeBouncer:
@@ -36,7 +45,35 @@ class FakeBouncer:
         return self.verdict
 
 
-# --- Fake Telegram objects ------------------------------------------------------
+Step = NextQuestion | Dossier | Exception
+
+
+class FakeInterviewer:
+    """Returns scripted steps; records every transcript it was shown."""
+
+    def __init__(self, first: str | Exception = "What do you hoard?", *steps: Step) -> None:
+        self.first = first
+        self.steps = list(steps)
+        self.transcripts: list[tuple[QA, ...]] = []
+
+    async def first_question(self) -> str:
+        if isinstance(self.first, Exception):
+            raise self.first
+        return self.first
+
+    async def next_step(self, transcript: Sequence[QA]) -> NextQuestion | Dossier:
+        self.transcripts.append(tuple(transcript))
+        step = self.steps.pop(0)
+        if isinstance(step, Exception):
+            raise step
+        return step
+
+
+def ask(question: str) -> NextQuestion:
+    return NextQuestion(question=question, enough_information=False)
+
+
+# --- Fake Telegram objects ------------------------------------------------------------
 
 
 def telegram_file(data: bytes = PHOTO_BYTES, error: Exception | None = None) -> MagicMock:
@@ -47,6 +84,7 @@ def telegram_file(data: bytes = PHOTO_BYTES, error: Exception | None = None) -> 
 
 def fake_message(
     *,
+    text: str | None = None,
     photo_size: int | None = None,
     document_mime: str | None = None,
     document_size: int = 1_000,
@@ -54,6 +92,7 @@ def fake_message(
 ) -> MagicMock:
     message = MagicMock()
     message.reply_text = AsyncMock()
+    message.text = text
     message.photo = ()
     message.document = None
     tg_file = tg_file or telegram_file()
@@ -78,79 +117,207 @@ def fake_update(message: MagicMock | None, chat_id: int = 42) -> MagicMock:
     return update
 
 
+def make_deps(
+    bouncer: FakeBouncer | None = None, interviewer: FakeInterviewer | None = None
+) -> Deps:
+    return Deps(
+        bouncer=bouncer or FakeBouncer(),
+        interviewer=interviewer or FakeInterviewer(),
+        sessions=SessionStore(),
+    )
+
+
 def make_context(deps: Deps) -> MagicMock:
     context = MagicMock()
     context.bot_data = {DEPS_KEY: deps}
     return context
 
 
-def make_deps(bouncer: FakeBouncer | None = None) -> Deps:
-    return Deps(bouncer=bouncer or FakeBouncer(), sessions=SessionStore())
+def replies(message: MagicMock) -> list[str]:
+    return [str(call.args[0]) for call in message.reply_text.await_args_list]
 
 
 def replied(message: MagicMock) -> str:
     message.reply_text.assert_awaited_once()
-    return str(message.reply_text.await_args.args[0])
+    return replies(message)[0]
 
 
-# --- Text and other non-photo messages ------------------------------------------------
+async def send_photo(deps: Deps, chat_id: int = 42, **kwargs: object) -> MagicMock:
+    message = fake_message(photo_size=50_000, **kwargs)  # type: ignore[arg-type]
+    await gateway.on_photo(fake_update(message, chat_id), make_context(deps))
+    return message
 
 
-async def test_text_before_photo_gets_nudge_without_calling_bouncer() -> None:
-    bouncer = FakeBouncer()
-    deps = make_deps(bouncer)
-    message = fake_message()
-    await gateway.on_other(fake_update(message), make_context(deps))
+async def send_text(deps: Deps, text: str | None, chat_id: int = 42) -> MagicMock:
+    message = fake_message(text=text)
+    await gateway.on_other(fake_update(message, chat_id), make_context(deps))
+    return message
+
+
+def interviewing(deps: Deps, question: str = "What do you hoard?", chat_id: int = 42) -> Deps:
+    deps.sessions.start_interview(chat_id, PHOTO, question)
+    return deps
+
+
+# --- Before the interview ---------------------------------------------------------------
+
+
+async def test_text_before_photo_gets_nudge() -> None:
+    message = await send_text(make_deps(), "hi")
     assert replied(message) == gateway.NUDGE_SEND_PHOTO
-    assert bouncer.images == []
 
 
-async def test_text_after_acceptance_gets_youre_in_reply() -> None:
-    deps = make_deps()
-    deps.sessions.set_phase(42, Phase.PHOTO_ACCEPTED)
-    message = fake_message()
-    await gateway.on_other(fake_update(message), make_context(deps))
-    assert replied(message) == gateway.ALREADY_ACCEPTED
-
-
-# --- Bouncer: positive and negative ----------------------------------------------------
-
-
-async def test_person_photo_is_accepted() -> None:
-    bouncer = FakeBouncer(HUMAN)
-    deps = make_deps(bouncer)
-    message = fake_message(photo_size=50_000)
-    await gateway.on_photo(fake_update(message), make_context(deps))
-
-    assert replied(message) == gateway.PHOTO_ACCEPTED
-    assert deps.sessions.get(42).phase is Phase.PHOTO_ACCEPTED
-    assert bouncer.images == [ImageInput(data=PHOTO_BYTES, mime_type="image/jpeg")]
-
-
-async def test_landscape_photo_is_rejected_cheekily() -> None:
+async def test_landscape_photo_is_rejected_and_resets() -> None:
     deps = make_deps(FakeBouncer(NO_HUMAN))
-    message = fake_message(photo_size=50_000)
-    await gateway.on_photo(fake_update(message), make_context(deps))
-
-    reply = replied(message)
-    assert reply == gateway.BOUNCER_REJECTION
-    assert "human" in reply.lower()
+    message = await send_photo(deps)
+    assert replied(message) == gateway.BOUNCER_REJECTION
     assert deps.sessions.get(42).phase is Phase.AWAITING_PHOTO
 
 
-async def test_rejection_resets_a_previously_accepted_session() -> None:
-    deps = make_deps(FakeBouncer(NO_HUMAN))
-    deps.sessions.set_phase(42, Phase.PHOTO_ACCEPTED)
-    await gateway.on_photo(fake_update(fake_message(photo_size=50_000)), make_context(deps))
+# --- Starting the interview --------------------------------------------------------------
+
+
+async def test_person_photo_starts_interview_with_first_question() -> None:
+    deps = make_deps(FakeBouncer(HUMAN), FakeInterviewer("What do you hoard?"))
+    message = await send_photo(deps)
+
+    assert replies(message) == [
+        gateway.PHOTO_ACCEPTED,
+        gateway.format_question(1, "What do you hoard?"),
+    ]
+    session = deps.sessions.get(42)
+    assert session.phase is Phase.INTERVIEWING
+    assert session.photo == PHOTO
+    assert session.pending_question == "What do you hoard?"
+
+
+async def test_first_question_failure_keeps_awaiting_photo() -> None:
+    deps = make_deps(FakeBouncer(HUMAN), FakeInterviewer(InterviewerError("timed out")))
+    message = await send_photo(deps)
+    assert replied(message) == gateway.INTERVIEWER_UNAVAILABLE_START
     assert deps.sessions.get(42).phase is Phase.AWAITING_PHOTO
 
 
-async def test_largest_photo_size_is_downloaded() -> None:
+# --- Answering, one question per turn ----------------------------------------------------
+
+
+async def test_answer_is_recorded_and_next_question_sent() -> None:
+    interviewer = FakeInterviewer("Q1?", ask("Q2?"))
+    deps = interviewing(make_deps(interviewer=interviewer), "Q1?")
+    message = await send_text(deps, "  Spoons.  ")
+
+    assert replied(message) == gateway.format_question(2, "Q2?")
+    assert interviewer.transcripts == [(QA(question="Q1?", answer="Spoons."),)]
+    session = deps.sessions.get(42)
+    assert session.transcript == (QA(question="Q1?", answer="Spoons."),)
+    assert session.pending_question == "Q2?"
+
+
+async def test_full_interview_resumes_across_messages_and_hands_off(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    caplog.set_level(logging.INFO, logger="telegram_documentaries")
+    interviewer = FakeInterviewer("Q1?", ask("Q2?"), ask("Q3?"), ask("Q4?"), ask("Q5?"), DOSSIER)
+    deps = make_deps(FakeBouncer(HUMAN), interviewer)
+    await send_photo(deps)
+
+    for n in range(1, 5):
+        message = await send_text(deps, f"Answer {n}")
+        assert replied(message) == gateway.format_question(n + 1, f"Q{n + 1}?")
+        assert len(deps.sessions.get(42).transcript) == n
+
+    finale = await send_text(deps, "Answer 5")
+    reply = replied(finale)
+    assert reply == gateway.format_finale(DOSSIER)
+    for expected in (DOSSIER.profile, "hums while thinking", "raccoon", "being developed"):
+        assert expected in reply
+
+    session = deps.sessions.get(42)
+    assert session.phase is Phase.INTERVIEW_COMPLETE
+    assert [qa.answer for qa in session.transcript] == [f"Answer {n}" for n in range(1, 6)]
+    assert session.handoff() == InterviewHandoff(photo=PHOTO, dossier=DOSSIER)
+    assert "event=interview_handoff_ready chat_id=42" in caplog.text
+    assert "animal='raccoon'" in caplog.text
+
+
+# --- Wrong input mid-interview: nudge, no state change -----------------------------------
+
+
+@pytest.mark.parametrize("text", [None, "", "   ", "/start", "/restart now"])
+async def test_non_answers_get_nudge_repeating_the_question(text: str | None) -> None:
+    interviewer = FakeInterviewer("Q1?")
+    deps = interviewing(make_deps(interviewer=interviewer), "Q1?")
+    before = deps.sessions.get(42)
+    message = await send_text(deps, text)
+
+    assert replied(message) == gateway.format_nudge(1, "Q1?")
+    assert deps.sessions.get(42) == before
+    assert interviewer.transcripts == []
+
+
+async def test_overlong_answer_is_refused() -> None:
+    interviewer = FakeInterviewer("Q1?")
+    deps = interviewing(make_deps(interviewer=interviewer), "Q1?")
+    message = await send_text(deps, "x" * 1001)
+    assert replied(message) == gateway.format_too_long(1, "Q1?")
+    assert interviewer.transcripts == []
+    assert deps.sessions.get(42).transcript == ()
+
+
+async def test_photo_mid_interview_gets_nudge_without_bouncer() -> None:
     bouncer = FakeBouncer()
-    await gateway.on_photo(
-        fake_update(fake_message(photo_size=50_000)), make_context(make_deps(bouncer))
-    )
-    assert bouncer.images[0].data == PHOTO_BYTES  # not the b"tiny" thumbnail
+    deps = interviewing(make_deps(bouncer), "Q1?")
+    deps.sessions.record_answer(42, "A1", "Q2?")
+    message = await send_photo(deps)
+    assert replied(message) == gateway.format_nudge(2, "Q2?")
+    assert bouncer.images == []
+    assert deps.sessions.get(42).pending_question == "Q2?"
+
+
+async def test_interviewer_failure_does_not_record_and_retry_works() -> None:
+    interviewer = FakeInterviewer("Q1?", InterviewerError("quota"), ask("Q2?"))
+    deps = interviewing(make_deps(interviewer=interviewer), "Q1?")
+
+    failed = await send_text(deps, "Spoons.")
+    assert replied(failed) == gateway.INTERVIEWER_UNAVAILABLE
+    assert deps.sessions.get(42).transcript == ()
+
+    retried = await send_text(deps, "Spoons.")
+    assert replied(retried) == gateway.format_question(2, "Q2?")
+    assert len(deps.sessions.get(42).transcript) == 1
+
+
+# --- After the interview ----------------------------------------------------------------------
+
+
+async def test_text_after_completion_gets_in_progress_reply() -> None:
+    deps = interviewing(make_deps(), "Q1?")
+    deps.sessions.complete_interview(42, "A1", DOSSIER)
+    message = await send_text(deps, "hello?")
+    assert replied(message) == gateway.PORTRAIT_IN_PROGRESS
+
+
+async def test_new_photo_after_completion_starts_fresh_interview() -> None:
+    deps = interviewing(make_deps(interviewer=FakeInterviewer("Fresh Q?")), "Q1?")
+    deps.sessions.complete_interview(42, "A1", DOSSIER)
+    message = await send_photo(deps)
+    assert replies(message)[-1] == gateway.format_question(1, "Fresh Q?")
+    session = deps.sessions.get(42)
+    assert session.transcript == ()
+    assert session.dossier is None
+
+
+async def test_chats_are_isolated() -> None:
+    interviewer = FakeInterviewer("Q1?")
+    deps = make_deps(FakeBouncer(HUMAN), interviewer)
+    await send_photo(deps, chat_id=1)
+    other = await send_text(deps, "hi", chat_id=2)
+    assert replied(other) == gateway.NUDGE_SEND_PHOTO
+    assert deps.sessions.get(1).phase is Phase.INTERVIEWING
+    assert interviewer.transcripts == []
+
+
+# --- Photo intake edge cases (Bouncer stage, unchanged behaviour) ----------------------------
 
 
 async def test_png_sent_as_file_is_checked_as_png() -> None:
@@ -158,17 +325,12 @@ async def test_png_sent_as_file_is_checked_as_png() -> None:
     message = fake_message(document_mime="image/png")
     await gateway.on_photo(fake_update(message), make_context(make_deps(bouncer)))
     assert bouncer.images[0].mime_type == "image/png"
-    assert replied(message) == gateway.PHOTO_ACCEPTED
-
-
-# --- Graceful degradation (no state change, friendly reply) -------------------------------
 
 
 async def test_unsupported_image_type_is_refused_before_bouncer() -> None:
     bouncer = FakeBouncer()
-    deps = make_deps(bouncer)
     message = fake_message(document_mime="image/gif")
-    await gateway.on_photo(fake_update(message), make_context(deps))
+    await gateway.on_photo(fake_update(message), make_context(make_deps(bouncer)))
     assert replied(message) == gateway.UNSUPPORTED_IMAGE
     assert bouncer.images == []
 
@@ -183,63 +345,44 @@ async def test_oversized_photo_is_refused_without_downloading() -> None:
     assert bouncer.images == []
 
 
-async def test_download_failure_gets_friendly_reply(caplog: pytest.LogCaptureFixture) -> None:
+async def test_largest_photo_size_is_downloaded() -> None:
     bouncer = FakeBouncer()
-    deps = make_deps(bouncer)
-    deps.sessions.set_phase(42, Phase.PHOTO_ACCEPTED)
-    message = fake_message(photo_size=50_000, tg_file=telegram_file(error=NetworkError("down")))
-    await gateway.on_photo(fake_update(message), make_context(deps))
+    await send_photo(make_deps(bouncer))
+    assert bouncer.images[0].data == PHOTO_BYTES  # not the b"tiny" thumbnail
 
+
+@pytest.mark.parametrize("data", [b"", None])
+async def test_download_failure_gets_friendly_reply(
+    data: bytes | None, caplog: pytest.LogCaptureFixture
+) -> None:
+    error = NetworkError("down") if data is None else None
+    deps = make_deps()
+    message = await send_photo(deps, tg_file=telegram_file(data or b"", error=error))
     assert replied(message) == gateway.PHOTO_DOWNLOAD_FAILED
-    assert bouncer.images == []
-    assert deps.sessions.get(42).phase is Phase.PHOTO_ACCEPTED
+    assert deps.sessions.get(42).phase is Phase.AWAITING_PHOTO
     assert "event=photo_download_failed" in caplog.text
-
-
-async def test_empty_download_is_treated_as_failure() -> None:
-    message = fake_message(photo_size=50_000, tg_file=telegram_file(b""))
-    await gateway.on_photo(fake_update(message), make_context(make_deps()))
-    assert replied(message) == gateway.PHOTO_DOWNLOAD_FAILED
 
 
 async def test_bouncer_failure_gets_friendly_reply(caplog: pytest.LogCaptureFixture) -> None:
     deps = make_deps(FakeBouncer(error=BouncerError("timed out")))
-    deps.sessions.set_phase(42, Phase.PHOTO_ACCEPTED)
-    message = fake_message(photo_size=50_000)
-    await gateway.on_photo(fake_update(message), make_context(deps))
-
+    message = await send_photo(deps)
     assert replied(message) == gateway.BOUNCER_UNAVAILABLE
-    assert deps.sessions.get(42).phase is Phase.PHOTO_ACCEPTED
     assert "event=bouncer_failed" in caplog.text
 
 
-async def test_update_without_message_is_ignored() -> None:
-    bouncer = FakeBouncer()
-    await gateway.on_photo(fake_update(None), make_context(make_deps(bouncer)))
-    await gateway.on_other(fake_update(None), make_context(make_deps(bouncer)))
-    assert bouncer.images == []
-
-
-# --- Isolation and logging -------------------------------------------------------------------
-
-
-async def test_chats_are_isolated() -> None:
-    deps = make_deps(FakeBouncer(HUMAN))
-    await gateway.on_photo(fake_update(fake_message(photo_size=1), chat_id=1), make_context(deps))
-    other = fake_message()
-    await gateway.on_other(fake_update(other, chat_id=2), make_context(deps))
-    assert deps.sessions.get(1).phase is Phase.PHOTO_ACCEPTED
-    assert replied(other) == gateway.NUDGE_SEND_PHOTO
-
-
-async def test_verdict_is_logged_with_chat_id(caplog: pytest.LogCaptureFixture) -> None:
+async def test_verdict_is_logged_without_image_bytes(caplog: pytest.LogCaptureFixture) -> None:
     caplog.set_level(logging.INFO, logger="telegram_documentaries")
-    deps = make_deps(FakeBouncer(NO_HUMAN))
-    await gateway.on_photo(fake_update(fake_message(photo_size=1), chat_id=777), make_context(deps))
-    assert "event=bouncer_verdict" in caplog.text
-    assert "chat_id=777" in caplog.text
-    assert "human_present=False" in caplog.text
-    assert "person-or-landscape" not in caplog.text  # image bytes never logged
+    await send_photo(make_deps(FakeBouncer(NO_HUMAN)), chat_id=777)
+    assert "event=bouncer_verdict chat_id=777 human_present=False" in caplog.text
+    assert "person-or-landscape" not in caplog.text
+
+
+async def test_update_without_message_is_ignored() -> None:
+    interviewer = FakeInterviewer()
+    deps = make_deps(interviewer=interviewer)
+    await gateway.on_photo(fake_update(None), make_context(deps))
+    await gateway.on_other(fake_update(None), make_context(deps))
+    assert interviewer.transcripts == []
 
 
 # --- Application routing (real Telegram objects) ------------------------------------------------
