@@ -74,7 +74,7 @@ it is sent to the chat as text.
 **Acceptance:** audio plays in Telegram; the full happy path runs end to end.
 **Serves:** happy path.
 
-## Phase 7 — Resilience `[ ]`
+## Phase 7 — Resilience `[x]`
 
 - `/start` and `/restart` purge state and temp files from any phase.
 - Wrong-payload-at-wrong-stage guards for every phase (friendly nudge, no state
