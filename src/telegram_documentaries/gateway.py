@@ -5,7 +5,8 @@ Phase 1 behaviour: every new message gets the same hardcoded reply.
 
 import functools
 import logging
-from collections.abc import Awaitable, Callable
+from collections.abc import Callable, Coroutine
+from typing import Any
 
 from telegram import Update
 from telegram.ext import Application, ContextTypes, MessageHandler, filters
@@ -14,7 +15,7 @@ logger = logging.getLogger(__name__)
 
 REPLY_TEXT = "hey mate!"
 
-Handler = Callable[[Update, ContextTypes.DEFAULT_TYPE], Awaitable[None]]
+Handler = Callable[[Update, ContextTypes.DEFAULT_TYPE], Coroutine[Any, Any, None]]
 
 
 def log_update(handler: Handler) -> Handler:

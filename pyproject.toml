@@ -41,5 +41,6 @@ select = ["E", "F", "I", "B", "UP", "BLE", "S110", "S112"]
 
 [tool.mypy]
 strict = true
+plugins = ["pydantic.mypy"]
 mypy_path = "src"
 packages = ["telegram_documentaries", "tests"]
