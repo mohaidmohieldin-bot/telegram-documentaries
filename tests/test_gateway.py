@@ -313,8 +313,8 @@ async def test_full_run_delivers_portrait_then_narration(
         document=VOICEOVER.data,
         filename="voiceover.wav",
         caption=gateway.VOICEOVER_CAPTION,
-        write_timeout=gateway.PHOTO_UPLOAD_TIMEOUT_S,
-        read_timeout=gateway.PHOTO_UPLOAD_TIMEOUT_S,
+        write_timeout=gateway.MEDIA_TRANSFER_TIMEOUT_S,
+        read_timeout=gateway.MEDIA_TRANSFER_TIMEOUT_S,
     )
     assert narrator.scripts == [SCRIPT]
     for expected in (DOSSIER.profile, "hums while thinking", "raccoon", "Developing"):
@@ -323,8 +323,8 @@ async def test_full_run_delivers_portrait_then_narration(
     finale.reply_photo.assert_awaited_once_with(
         photo=PORTRAIT.data,
         caption=gateway.format_caption(DOSSIER),
-        write_timeout=gateway.PHOTO_UPLOAD_TIMEOUT_S,
-        read_timeout=gateway.PHOTO_UPLOAD_TIMEOUT_S,
+        write_timeout=gateway.MEDIA_TRANSFER_TIMEOUT_S,
+        read_timeout=gateway.MEDIA_TRANSFER_TIMEOUT_S,
     )
     session = deps.sessions.get(42)
     handoff = InterviewHandoff(photo=PHOTO, dossier=DOSSIER, transcript=session.transcript)
@@ -340,10 +340,10 @@ async def test_full_run_delivers_portrait_then_narration(
     assert "PNG-hybrid" not in caplog.text  # portrait bytes never logged
 
 
-def test_photo_upload_allows_time_for_large_portraits() -> None:
+def test_media_transfers_allow_time_for_large_files() -> None:
     # python-telegram-bot defaults to 5 s, which large generated images exceed: the photo
     # arrives but the bot times out and the session wrongly stays undelivered.
-    assert gateway.PHOTO_UPLOAD_TIMEOUT_S >= 60
+    assert gateway.MEDIA_TRANSFER_TIMEOUT_S >= 60
 
 
 def test_caption_names_the_animal() -> None:
@@ -698,7 +698,7 @@ def test_image_document_routes_to_photo_handler(app: Application) -> None:  # ty
     assert matching_callbacks(app, update) == [gateway.on_photo]
 
 
-@pytest.mark.parametrize("text", ["hi", "/start", "🦁"])
+@pytest.mark.parametrize("text", ["hi", "/help", "🦁"])
 def test_text_routes_to_other_handler(app: Application, text: str) -> None:  # type: ignore[type-arg]
     update = Update(update_id=1, message=real_message(text=text))
     assert matching_callbacks(app, update) == [gateway.on_other]

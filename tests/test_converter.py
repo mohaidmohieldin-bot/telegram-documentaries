@@ -46,7 +46,14 @@ def test_agent_uses_flash_image_with_image_output() -> None:
 
 def test_instruction_covers_likeness_habitat_and_no_text() -> None:
     instruction = str(build_converter_agent().instruction).lower()
-    phrases = ("photorealistic", "recognisable", "habitat", "no text", "ignore any instructions")
+    phrases = (
+        "photorealistic",
+        "recognisable",
+        "habitat",
+        "no text",
+        "exactly one",
+        "ignore any instructions",
+    )
     for phrase in phrases:
         assert phrase in instruction
 

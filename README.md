@@ -4,13 +4,13 @@ A Telegram bot that turns you into the star of a comedy wildlife documentary.
 Send it a portrait, answer a short interview, and get back a portrait of yourself
 as a human–animal hybrid plus a dramatic British-documentary voiceover.
 
-**Current status: Phase 6 (the Narrator): the full documentary works end to end.**
-Send the bot a selfie. A Gemini 3.1 Flash-Lite vision agent (Google ADK) checks there's a
-real human in it, the Interviewer asks 5–7 playful questions one at a time and writes
-field notes with your spirit animal, the Converter (Gemini 3.1 Flash Image) sends a
-photorealistic hybrid portrait, the Scripter writes a hushed 60–90 word narration, and
-the Narrator (Gemini 3.8 Flash TTS) voices it as `voiceover.wav`. Phase 7 (resilience:
-`/start`, `/restart`, guards) is next. See [`SPECS/ROADMAP.md`](SPECS/ROADMAP.md).
+**Current status: all seven roadmap phases are built.** Send the bot a selfie. A Gemini
+3.1 Flash-Lite vision agent (Google ADK) checks there's a real human in it, the
+Interviewer asks 5–7 playful questions one at a time and writes field notes with your
+spirit animal, the Converter (Gemini 3.1 Flash Image) sends a photorealistic hybrid
+portrait, the Scripter writes a hushed 60–90 word narration, and the Narrator (Gemini
+3.8 Flash TTS) voices it as `voiceover.wav`. `/start` or `/restart` wipes everything at
+any point. See [`SPECS/ROADMAP.md`](SPECS/ROADMAP.md).
 
 ## Setup
 
@@ -96,6 +96,13 @@ SPECS/              project constitution: MISSION, TECH, ROADMAP
 
 ## Bot commands
 
-None yet. `/start` and `/restart` arrive in Phase 7; for now they get the same
-reply as any other text. Mid-interview, photos and commands get a reminder of the current question; after
-the interview, a new photo starts a fresh documentary.
+| Command | What it does |
+| --- | --- |
+| `/start` | Wipes your session and welcomes you; send a selfie to begin |
+| `/restart` | Wipes everything (photo, answers, portrait, script) from any point |
+
+Both appear in Telegram's "/" menu. Any other message is answered according to where you
+are in the documentary: mid-interview, photos and other commands get a reminder of the
+current question, and if a stage fails (portrait, script or voiceover), any message
+retries just that stage. Nothing is written to disk; sessions live in memory and are
+lost when the bot restarts.
