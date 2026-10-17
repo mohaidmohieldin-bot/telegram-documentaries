@@ -56,7 +56,7 @@ no cross-chat leakage, and the final dossier and animal are validated models.
 failure produces a graceful reply.
 **Serves:** happy path.
 
-## Phase 5 — Scripter `[ ]`
+## Phase 5 — Scripter `[x]`
 
 - Dossier → one paragraph (~60–90 words) of dramatic British-documentary
   narration.
