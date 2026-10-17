@@ -27,11 +27,19 @@ NO_HUMAN_JSON = '{"human_present": false, "reason": "A mountain lake at sunset."
 
 
 class FakeEvent:
-    def __init__(self, text: str | None, final: bool = True) -> None:
+    def __init__(
+        self,
+        text: str | None,
+        final: bool = True,
+        error_code: str | None = None,
+        error_message: str | None = None,
+    ) -> None:
         self.content = (
             types.Content(role="model", parts=[types.Part(text=text)]) if text is not None else None
         )
         self._final = final
+        self.error_code = error_code
+        self.error_message = error_message
 
     def is_final_response(self) -> bool:
         return self._final
@@ -149,6 +157,21 @@ async def test_no_final_response_raises_bouncer_error() -> None:
 async def test_final_event_without_content_raises_bouncer_error() -> None:
     with pytest.raises(BouncerError):
         await bouncer_with(FakeRunner([FakeEvent(None)])).check(IMAGE)
+
+
+async def test_model_error_event_raises_bouncer_error_with_the_real_reason() -> None:
+    # ADK 2.x reports API failures (bad key, quota, safety) as an error event, not a raise.
+    leaked_key = FakeEvent(
+        None, error_code="403", error_message="Your API key was reported as leaked."
+    )
+    with pytest.raises(BouncerError, match="403.*reported as leaked"):
+        await bouncer_with(FakeRunner([leaked_key])).check(IMAGE)
+
+
+async def test_non_final_error_event_still_raises_bouncer_error() -> None:
+    error = FakeEvent(None, final=False, error_code="RESOURCE_EXHAUSTED", error_message="quota")
+    with pytest.raises(BouncerError, match="RESOURCE_EXHAUSTED"):
+        await bouncer_with(FakeRunner([error, FakeEvent(HUMAN_JSON)])).check(IMAGE)
 
 
 async def test_runner_exception_raises_bouncer_error() -> None:

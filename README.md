@@ -57,7 +57,7 @@ test run never calls Gemini or Telegram; external services are faked.
 ### Live tests
 
 `scripts/test-live` sends real images to Gemini to confirm the Bouncer's judgement.
-It needs `GEMINI_API_KEY` in `.env` and two JPEGs you provide:
+It needs `GEMINI_API_KEY` in `.env` and two images (JPEG, PNG or WebP) you provide:
 
 ```
 tests/live/fixtures/person.jpg      a photo with a clearly visible person

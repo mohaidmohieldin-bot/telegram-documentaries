@@ -103,6 +103,9 @@ class AdkBouncer:
         async for event in self._runner.run_async(
             user_id=self.USER_ID, session_id=session_id, new_message=message
         ):
+            # ADK reports model/API failures (bad key, quota, safety block) as error events.
+            if event.error_code or event.error_message:
+                raise BouncerError(f"model error {event.error_code}: {event.error_message}")
             if event.is_final_response():
                 parts = event.content.parts if event.content else None
                 if not parts:

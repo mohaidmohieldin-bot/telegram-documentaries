@@ -5,6 +5,8 @@ two images you supply in tests/live/fixtures/ (git-ignored, never committed):
 
     person.jpg     a photo with a clearly visible person
     landscape.jpg  a landscape or object with no people
+
+(JPEG, PNG or WebP all work; the real type is detected from the file contents.)
 """
 
 from pathlib import Path
@@ -20,11 +22,23 @@ pytestmark = pytest.mark.live
 FIXTURES = Path(__file__).parent / "fixtures"
 
 
+def sniff_mime_type(data: bytes) -> str:
+    """Detect the real image type from its first bytes (file extensions can lie)."""
+    if data.startswith(b"\xff\xd8\xff"):
+        return "image/jpeg"
+    if data.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "image/png"
+    if data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+        return "image/webp"
+    pytest.fail("fixture images must be JPEG, PNG or WebP")
+
+
 def load_image(name: str) -> ImageInput:
     path = FIXTURES / name
     if not path.is_file():
         pytest.skip(f"add {path} to run this live test")
-    return ImageInput(data=path.read_bytes(), mime_type="image/jpeg")
+    data = path.read_bytes()
+    return ImageInput.model_validate({"data": data, "mime_type": sniff_mime_type(data)})
 
 
 @pytest.fixture(scope="module", autouse=True)
