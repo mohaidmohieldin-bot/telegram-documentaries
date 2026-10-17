@@ -17,8 +17,8 @@ from telegram.error import TelegramError
 from telegram.ext import Application, ContextTypes, MessageHandler, filters
 
 from telegram_documentaries.bouncer import Bouncer, BouncerError
-from telegram_documentaries.media import MAX_IMAGE_BYTES, SUPPORTED_IMAGE_TYPES, ImageInput
 from telegram_documentaries.interviewer import InterviewerError, InterviewerPort, NextQuestion
+from telegram_documentaries.media import MAX_IMAGE_BYTES, SUPPORTED_IMAGE_TYPES, ImageInput
 from telegram_documentaries.session import MAX_ANSWER_CHARS, QA, Dossier, Phase, SessionStore
 
 logger = logging.getLogger(__name__)
