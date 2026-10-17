@@ -1,4 +1,4 @@
-"""Gateway routing: Bouncer gate, one-question-per-turn interview, finale, hybrid portrait."""
+"""Gateway routing: Bouncer, one-question-per-turn interview, finale, portrait, narration."""
 
 import logging
 from collections.abc import Sequence
@@ -16,7 +16,15 @@ from telegram_documentaries.converter import ConverterError
 from telegram_documentaries.gateway import DEPS_KEY, Deps, build_application
 from telegram_documentaries.interviewer import InterviewerError, NextQuestion
 from telegram_documentaries.media import MAX_IMAGE_BYTES, ImageInput, PortraitImage
-from telegram_documentaries.session import QA, Dossier, InterviewHandoff, Phase, SessionStore
+from telegram_documentaries.scripter import ScripterError
+from telegram_documentaries.session import (
+    QA,
+    Dossier,
+    InterviewHandoff,
+    NarrationScript,
+    Phase,
+    SessionStore,
+)
 
 FAKE_TOKEN = "123456789:AAH-fake-token-for-tests"
 PHOTO_BYTES = b"\xff\xd8person-or-landscape"
@@ -86,6 +94,22 @@ class FakeConverter:
 
 
 PORTRAIT = PortraitImage(data=b"\x89PNG-hybrid", mime_type="image/png")
+SCRIPT = NarrationScript(text=" ".join(["Here, in the hush of dusk, the raccoon stirs."] * 7))
+
+
+class FakeScripter:
+    """Returns scripted narrations or errors; records every handoff it received."""
+
+    def __init__(self, *results: NarrationScript | Exception) -> None:
+        self.results = list(results) or [SCRIPT]
+        self.handoffs: list[InterviewHandoff] = []
+
+    async def write(self, handoff: InterviewHandoff) -> NarrationScript:
+        self.handoffs.append(handoff)
+        result = self.results.pop(0)
+        if isinstance(result, Exception):
+            raise result
+        return result
 
 
 def ask(question: str) -> NextQuestion:
@@ -141,11 +165,13 @@ def make_deps(
     bouncer: FakeBouncer | None = None,
     interviewer: FakeInterviewer | None = None,
     converter: FakeConverter | None = None,
+    scripter: FakeScripter | None = None,
 ) -> Deps:
     return Deps(
         bouncer=bouncer or FakeBouncer(),
         interviewer=interviewer or FakeInterviewer(),
         converter=converter or FakeConverter(),
+        scripter=scripter or FakeScripter(),
         sessions=SessionStore(),
     )
 
@@ -236,13 +262,14 @@ async def test_answer_is_recorded_and_next_question_sent() -> None:
     assert session.pending_question == "Q2?"
 
 
-async def test_full_interview_resumes_across_messages_and_delivers_portrait(
+async def test_full_run_delivers_portrait_then_narration(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     caplog.set_level(logging.INFO, logger="telegram_documentaries")
     interviewer = FakeInterviewer("Q1?", ask("Q2?"), ask("Q3?"), ask("Q4?"), ask("Q5?"), DOSSIER)
     converter = FakeConverter(PORTRAIT)
-    deps = make_deps(FakeBouncer(HUMAN), interviewer, converter)
+    scripter = FakeScripter(SCRIPT)
+    deps = make_deps(FakeBouncer(HUMAN), interviewer, converter, scripter)
     await send_photo(deps)
 
     for n in range(1, 5):
@@ -252,7 +279,12 @@ async def test_full_interview_resumes_across_messages_and_delivers_portrait(
 
     finale = await send_text(deps, "Answer 5")
     texts = replies(finale)
-    assert texts == [gateway.format_finale(DOSSIER), gateway.NARRATION_COMING_SOON]
+    assert texts == [
+        gateway.format_finale(DOSSIER),
+        gateway.format_script(SCRIPT),
+        gateway.VOICEOVER_COMING_SOON,
+    ]
+    assert SCRIPT.text in texts[1]
     for expected in (DOSSIER.profile, "hums while thinking", "raccoon", "Developing"):
         assert expected in texts[0]
 
@@ -262,13 +294,16 @@ async def test_full_interview_resumes_across_messages_and_delivers_portrait(
         write_timeout=gateway.PHOTO_UPLOAD_TIMEOUT_S,
         read_timeout=gateway.PHOTO_UPLOAD_TIMEOUT_S,
     )
-    assert converter.handoffs == [InterviewHandoff(photo=PHOTO, dossier=DOSSIER)]
-
     session = deps.sessions.get(42)
-    assert session.phase is Phase.PORTRAIT_DELIVERED
+    handoff = InterviewHandoff(photo=PHOTO, dossier=DOSSIER, transcript=session.transcript)
+    assert converter.handoffs == [handoff]
+    assert scripter.handoffs == [handoff]
+    assert session.phase is Phase.SCRIPT_READY
+    assert session.script == SCRIPT
     assert [qa.answer for qa in session.transcript] == [f"Answer {n}" for n in range(1, 6)]
     assert "event=interview_handoff_ready chat_id=42" in caplog.text
     assert "event=portrait_delivered chat_id=42 animal='raccoon'" in caplog.text
+    assert "event=script_ready chat_id=42 words=63" in caplog.text
     assert "PNG-hybrid" not in caplog.text  # portrait bytes never logged
 
 
@@ -358,10 +393,14 @@ async def test_any_text_after_failure_retries_the_portrait() -> None:
     deps = completed(make_deps(converter=converter))
     message = await send_text(deps, "try again please")
 
-    assert replies(message) == [gateway.RETRYING_PORTRAIT, gateway.NARRATION_COMING_SOON]
+    assert replies(message) == [
+        gateway.RETRYING_PORTRAIT,
+        gateway.format_script(SCRIPT),
+        gateway.VOICEOVER_COMING_SOON,
+    ]
     message.reply_photo.assert_awaited_once()
     assert len(converter.handoffs) == 1
-    assert deps.sessions.get(42).phase is Phase.PORTRAIT_DELIVERED
+    assert deps.sessions.get(42).phase is Phase.SCRIPT_READY
 
 
 async def test_failed_retry_stays_retryable() -> None:
@@ -380,25 +419,72 @@ async def test_telegram_send_failure_leaves_portrait_retryable() -> None:
     assert deps.sessions.get(42).phase is Phase.INTERVIEW_COMPLETE
 
 
-async def test_text_after_delivery_gets_coming_soon_reply() -> None:
+# --- Script: failure, retry, afterwards ---------------------------------------------------------
+
+
+def portrait_delivered(deps: Deps) -> Deps:
+    completed(deps).sessions.deliver_portrait(42)
+    return deps
+
+
+async def test_scripter_failure_keeps_portrait_and_invites_retry(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    scripter = FakeScripter(ScripterError("draft rejected twice: narration has 41 words"))
+    deps = completed(make_deps(scripter=scripter))
+    message = await send_text(deps, "go")  # retries the portrait, which succeeds
+
+    assert replies(message) == [gateway.RETRYING_PORTRAIT, gateway.SCRIPTER_FAILED]
+    message.reply_photo.assert_awaited_once()
+    assert deps.sessions.get(42).phase is Phase.PORTRAIT_DELIVERED
+    assert "event=scripter_failed chat_id=42" in caplog.text
+
+
+async def test_text_after_script_failure_retries_only_the_script() -> None:
     converter = FakeConverter()
-    deps = completed(make_deps(converter=converter))
-    deps.sessions.deliver_portrait(42)
-    message = await send_text(deps, "hello?")
-    assert replied(message) == gateway.NARRATION_COMING_SOON
+    scripter = FakeScripter(SCRIPT)
+    deps = portrait_delivered(make_deps(converter=converter, scripter=scripter))
+    message = await send_text(deps, "again")
+
+    assert replies(message) == [
+        gateway.RETRYING_SCRIPT,
+        gateway.format_script(SCRIPT),
+        gateway.VOICEOVER_COMING_SOON,
+    ]
+    message.reply_photo.assert_not_awaited()
     assert converter.handoffs == []
+    assert deps.sessions.get(42).phase is Phase.SCRIPT_READY
 
 
-@pytest.mark.parametrize("delivered", [False, True])
-async def test_new_photo_after_interview_starts_fresh(delivered: bool) -> None:
+async def test_failed_script_retry_stays_retryable() -> None:
+    deps = portrait_delivered(make_deps(scripter=FakeScripter(ScripterError("timed out"))))
+    message = await send_text(deps, "again")
+    assert replies(message) == [gateway.RETRYING_SCRIPT, gateway.SCRIPTER_FAILED]
+    assert deps.sessions.get(42).phase is Phase.PORTRAIT_DELIVERED
+
+
+async def test_text_after_script_gets_coming_soon_reply() -> None:
+    scripter = FakeScripter()
+    deps = portrait_delivered(make_deps(scripter=scripter))
+    deps.sessions.store_script(42, SCRIPT)
+    message = await send_text(deps, "hello?")
+    assert replied(message) == gateway.VOICEOVER_COMING_SOON
+    assert scripter.handoffs == []
+
+
+@pytest.mark.parametrize("stage", ["completed", "portrait", "script"])
+async def test_new_photo_after_interview_starts_fresh(stage: str) -> None:
     deps = completed(make_deps(interviewer=FakeInterviewer("Fresh Q?")))
-    if delivered:
+    if stage in ("portrait", "script"):
         deps.sessions.deliver_portrait(42)
+    if stage == "script":
+        deps.sessions.store_script(42, SCRIPT)
     message = await send_photo(deps)
     assert replies(message)[-1] == gateway.format_question(1, "Fresh Q?")
     session = deps.sessions.get(42)
     assert session.phase is Phase.INTERVIEWING
     assert session.dossier is None
+    assert session.script is None
 
 
 async def test_chats_are_isolated() -> None:

@@ -12,7 +12,7 @@ from telegram_documentaries.converter import (
     build_converter_agent,
 )
 from telegram_documentaries.media import ImageInput, PortraitImage
-from telegram_documentaries.session import Dossier, InterviewHandoff
+from telegram_documentaries.session import QA, Dossier, InterviewHandoff
 from tests.adk_fakes import FakeEvent, FakeRunner
 
 PHOTO = ImageInput(data=b"\xff\xd8selfie-bytes", mime_type="image/jpeg")
@@ -22,7 +22,8 @@ DOSSIER = Dossier(
     suggested_animal="blue jay",
     animal_rationale="Highly social and famously loud.",
 )
-HANDOFF = InterviewHandoff(photo=PHOTO, dossier=DOSSIER)
+TRANSCRIPT = (QA(question="What do you sing?", answer="Loud choruses."),)
+HANDOFF = InterviewHandoff(photo=PHOTO, dossier=DOSSIER, transcript=TRANSCRIPT)
 PNG = b"\x89PNG\r\n\x1a\nhybrid"
 
 

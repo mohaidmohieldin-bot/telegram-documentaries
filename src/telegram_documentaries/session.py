@@ -8,7 +8,7 @@ raises `InvalidTransition`).
 from enum import StrEnum
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, StringConstraints
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints, field_validator
 
 from telegram_documentaries.media import ImageInput
 
@@ -16,6 +16,8 @@ Question = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1,
 Answer = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=1000)]
 
 MAX_ANSWER_CHARS = 1000
+MIN_SCRIPT_WORDS = 60
+MAX_SCRIPT_WORDS = 90
 
 
 class Phase(StrEnum):
@@ -23,6 +25,7 @@ class Phase(StrEnum):
     INTERVIEWING = "interviewing"
     INTERVIEW_COMPLETE = "interview_complete"
     PORTRAIT_DELIVERED = "portrait_delivered"
+    SCRIPT_READY = "script_ready"
 
 
 class InvalidTransition(Exception):
@@ -58,12 +61,38 @@ class Dossier(BaseModel):
 
 
 class InterviewHandoff(BaseModel):
-    """What the next stage (the Converter) receives once the interview is complete."""
+    """What the later stages (Converter, Scripter) receive once the interview is complete."""
 
     model_config = ConfigDict(frozen=True)
 
     photo: ImageInput
     dossier: Dossier
+    transcript: tuple[QA, ...]
+
+
+class NarrationScript(BaseModel):
+    """One paragraph of 60-90 words of documentary narration, ready to be voiced."""
+
+    model_config = ConfigDict(frozen=True)
+
+    text: str
+
+    @field_validator("text")
+    @classmethod
+    def _one_paragraph_in_range(cls, value: str) -> str:
+        if "\n\n" in value.strip().replace("\r\n", "\n"):
+            raise ValueError("narration must be one paragraph")
+        text = " ".join(value.split())
+        count = len(text.split())
+        if not MIN_SCRIPT_WORDS <= count <= MAX_SCRIPT_WORDS:
+            raise ValueError(
+                f"narration has {count} words; it needs {MIN_SCRIPT_WORDS}-{MAX_SCRIPT_WORDS}"
+            )
+        return text
+
+    @property
+    def word_count(self) -> int:
+        return len(self.text.split())
 
 
 class Session(BaseModel):
@@ -71,19 +100,24 @@ class Session(BaseModel):
 
     model_config = ConfigDict(frozen=True, strict=True)
 
-    schema_version: Literal[3] = 3
+    schema_version: Literal[4] = 4
     chat_id: int
     phase: Phase = Phase.AWAITING_PHOTO
     photo: ImageInput | None = None
     transcript: tuple[QA, ...] = ()
     pending_question: str | None = None
     dossier: Dossier | None = None
+    script: NarrationScript | None = None
 
     def handoff(self) -> InterviewHandoff:
-        completed = self.phase in (Phase.INTERVIEW_COMPLETE, Phase.PORTRAIT_DELIVERED)
+        completed = self.phase in (
+            Phase.INTERVIEW_COMPLETE,
+            Phase.PORTRAIT_DELIVERED,
+            Phase.SCRIPT_READY,
+        )
         if not completed or not self.photo or not self.dossier:
             raise InvalidTransition(f"chat {self.chat_id}: no completed interview to hand off")
-        return InterviewHandoff(photo=self.photo, dossier=self.dossier)
+        return InterviewHandoff(photo=self.photo, dossier=self.dossier, transcript=self.transcript)
 
 
 class SessionStore:
@@ -101,7 +135,11 @@ class SessionStore:
     def start_interview(self, chat_id: int, photo: ImageInput, first_question: str) -> Session:
         current = self.get(chat_id)
         self._require(
-            current, Phase.AWAITING_PHOTO, Phase.INTERVIEW_COMPLETE, Phase.PORTRAIT_DELIVERED
+            current,
+            Phase.AWAITING_PHOTO,
+            Phase.INTERVIEW_COMPLETE,
+            Phase.PORTRAIT_DELIVERED,
+            Phase.SCRIPT_READY,
         )
         return self._save(
             Session(
@@ -137,6 +175,13 @@ class SessionStore:
         current = self.get(chat_id)
         self._require(current, Phase.INTERVIEW_COMPLETE)
         return self._save(current.model_copy(update={"phase": Phase.PORTRAIT_DELIVERED}))
+
+    def store_script(self, chat_id: int, script: NarrationScript) -> Session:
+        current = self.get(chat_id)
+        self._require(current, Phase.PORTRAIT_DELIVERED)
+        return self._save(
+            current.model_copy(update={"phase": Phase.SCRIPT_READY, "script": script})
+        )
 
     def _answered(self, current: Session, answer: str) -> tuple[QA, ...]:
         self._require(current, Phase.INTERVIEWING)

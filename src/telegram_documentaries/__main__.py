@@ -12,6 +12,7 @@ from telegram_documentaries.converter import create_converter
 from telegram_documentaries.gateway import Deps, build_application
 from telegram_documentaries.interviewer import create_interviewer
 from telegram_documentaries.logging_setup import configure_logging
+from telegram_documentaries.scripter import create_scripter
 from telegram_documentaries.session import SessionStore
 
 logger = logging.getLogger("telegram_documentaries")
@@ -34,6 +35,7 @@ def main() -> None:
         bouncer=create_bouncer(),
         interviewer=create_interviewer(),
         converter=create_converter(),
+        scripter=create_scripter(),
         sessions=SessionStore(),
     )
     app = build_application(settings.telegram_bot_token.get_secret_value(), deps)
