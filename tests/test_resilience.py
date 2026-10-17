@@ -6,7 +6,7 @@ from collections.abc import Callable
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from telegram import BotCommand, Update
+from telegram import BotCommand, MessageEntity, Update
 from telegram.error import NetworkError
 
 from telegram_documentaries import gateway
@@ -110,6 +110,17 @@ async def test_after_restart_a_text_gets_the_photo_nudge() -> None:
 # --- Routing -----------------------------------------------------------------------------------
 
 
+def command_update(text: str, *, edited: bool = False) -> Update:
+    """A command as Telegram really sends it: with a bot_command entity and a bot attached."""
+    command = text.split()[0]
+    entity = MessageEntity(type=MessageEntity.BOT_COMMAND, offset=0, length=len(command))
+    message = real_message(text=text, entities=(entity,))
+    message.set_bot(MagicMock(username="documentaries_bot"))
+    if edited:
+        return Update(update_id=2, edited_message=message)
+    return Update(update_id=1, message=message)
+
+
 @pytest.fixture
 def app() -> object:
     return build_application(FAKE_TOKEN, make_deps())
@@ -117,20 +128,25 @@ def app() -> object:
 
 @pytest.mark.parametrize(
     ("text", "callback"),
-    [("/start", "on_start"), ("/restart", "on_restart"), ("/restart now", "on_restart")],
+    [
+        ("/start", "on_start"),
+        ("/restart", "on_restart"),
+        ("/restart now", "on_restart"),
+        ("/restart@documentaries_bot", "on_restart"),
+    ],
 )
 def test_commands_route_to_their_handlers(app: object, text: str, callback: str) -> None:
-    update = Update(update_id=1, message=real_message(text=text))
+    update = command_update(text)
     assert matching_callbacks(app, update) == [getattr(gateway, callback)]  # type: ignore[arg-type]
 
 
 def test_other_commands_still_route_to_on_other(app: object) -> None:
-    update = Update(update_id=1, message=real_message(text="/help"))
+    update = command_update("/help")
     assert matching_callbacks(app, update) == [gateway.on_other]  # type: ignore[arg-type]
 
 
 def test_edited_commands_are_ignored(app: object) -> None:
-    update = Update(update_id=2, edited_message=real_message(text="/restart"))
+    update = command_update("/restart", edited=True)
     assert matching_callbacks(app, update) == []  # type: ignore[arg-type]
 
 
