@@ -65,7 +65,7 @@ failure produces a graceful reply.
 it is sent to the chat as text.
 **Serves:** happy path.
 
-## Phase 6 — Narrator `[ ]`
+## Phase 6 — Narrator `[x]`
 
 - Script → Gemini TTS (`gemini-3.8-flash-tts`) → WAV → sent to the chat as a file.
   (Model and format changed from the original plan on 2026-10-18; see the Narrator spec.)
