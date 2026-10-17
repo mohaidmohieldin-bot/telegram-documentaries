@@ -9,6 +9,7 @@ from telegram import Update
 from telegram_documentaries.bouncer import create_bouncer
 from telegram_documentaries.config import Settings, export_gemini_credentials
 from telegram_documentaries.gateway import Deps, build_application
+from telegram_documentaries.interviewer import create_interviewer
 from telegram_documentaries.logging_setup import configure_logging
 from telegram_documentaries.session import SessionStore
 
@@ -28,7 +29,11 @@ def main() -> None:
         sys.exit(1)
 
     export_gemini_credentials(settings)
-    deps = Deps(bouncer=create_bouncer(), sessions=SessionStore())
+    deps = Deps(
+        bouncer=create_bouncer(),
+        interviewer=create_interviewer(),
+        sessions=SessionStore(),
+    )
     app = build_application(settings.telegram_bot_token.get_secret_value(), deps)
     logger.info("event=bot_starting transport=long_polling")
     app.run_polling(allowed_updates=[Update.MESSAGE])

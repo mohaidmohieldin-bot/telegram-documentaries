@@ -4,10 +4,11 @@ A Telegram bot that turns you into the star of a comedy wildlife documentary.
 Send it a portrait, answer a short interview, and get back a portrait of yourself
 as a human–animal hybrid plus a dramatic British-documentary voiceover.
 
-**Current status: Phase 2 (the Bouncer).** Send the bot a photo: a Gemini 3.1
-Flash-Lite vision agent (Google ADK) checks that it contains a real human. No human
-gets a cheeky rejection and a fresh start; a human gets through. Text messages get a
-nudge to send a photo. See [`SPECS/ROADMAP.md`](SPECS/ROADMAP.md) for what comes next.
+**Current status: Phase 3 (the Interviewer).** Send the bot a selfie. A Gemini 3.1
+Flash-Lite vision agent (Google ADK) checks there's a real human in it, then the
+Interviewer asks 5–7 playful questions, one at a time. After your last answer you get
+field notes on your quirks and your spirit animal. The hybrid portrait (Phase 4) comes
+next. See [`SPECS/ROADMAP.md`](SPECS/ROADMAP.md).
 
 ## Setup
 
@@ -65,7 +66,8 @@ tests/live/fixtures/landscape.jpg   a landscape or object, no people
 ```
 
 That folder is git-ignored so personal photos never reach the repo. Tests skip with a
-message if the key or an image is missing. Each run makes two small paid API calls.
+message if the key or an image is missing. A run makes about ten small paid API calls (two Bouncer checks plus one scripted
+interview, which needs no images).
 
 ## Project layout
 
@@ -74,7 +76,9 @@ src/telegram_documentaries/
   __main__.py       entrypoint: load settings, wire dependencies, start long polling
   config.py         typed settings from .env
   gateway.py        Telegram handlers (the only module that imports telegram)
+  agents.py         shared ADK caller: throwaway sessions, timeouts, structured output
   bouncer.py        ADK vision agent: does the photo contain a human?
+  interviewer.py    orchestrator: question-writer + profiler agents, 5–7 questions
   session.py        in-memory, per-chat session state (single state driver)
   media.py          ImageInput contract for images sent to Gemini
   logging_setup.py  key=value logging, logged_stage decorator, token kept out of logs
@@ -86,4 +90,5 @@ SPECS/              project constitution: MISSION, TECH, ROADMAP
 ## Bot commands
 
 None yet. `/start` and `/restart` arrive in Phase 7; for now they get the same
-reply as any other text. Sending a new photo always starts the check again.
+reply as any other text. Mid-interview, photos and commands get a reminder of the current question; after
+the interview, a new photo starts a fresh documentary.
