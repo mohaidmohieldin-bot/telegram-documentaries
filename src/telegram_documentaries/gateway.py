@@ -25,12 +25,9 @@ DEPS_KEY = "deps"
 
 # --- User-facing replies -------------------------------------------------------------
 
-NUDGE_SEND_PHOTO = (
-    "Welcome to The Telegram Documentaries! 🎬 Send me a photo of yourself to begin."
-)
+NUDGE_SEND_PHOTO = "Welcome to The Telegram Documentaries! 🎬 Send me a photo of yourself to begin."
 PHOTO_ACCEPTED = (
-    "A magnificent specimen! 🦁 You've made it past the Bouncer. "
-    "Your interview begins soon."
+    "A magnificent specimen! 🦁 You've made it past the Bouncer. Your interview begins soon."
 )
 ALREADY_ACCEPTED = (
     "You're in! 🎟️ The interview is still being filmed. "
@@ -42,8 +39,7 @@ BOUNCER_REJECTION = (
     "photo with a real human in it."
 )
 BOUNCER_UNAVAILABLE = (
-    "Our Bouncer has wandered off for a tea break. ☕ Please send your photo again "
-    "in a moment."
+    "Our Bouncer has wandered off for a tea break. ☕ Please send your photo again in a moment."
 )
 PHOTO_TOO_LARGE = "That photo is too big for me (20 MB max). Please send a smaller one. 📏"
 UNSUPPORTED_IMAGE = "I can't read that image format. Please send a JPG or PNG photo. 🖼️"

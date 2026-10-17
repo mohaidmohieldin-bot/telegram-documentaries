@@ -41,9 +41,7 @@ class FakeBouncer:
 
 def telegram_file(data: bytes = PHOTO_BYTES, error: Exception | None = None) -> MagicMock:
     tg_file = MagicMock()
-    tg_file.download_as_bytearray = AsyncMock(
-        return_value=bytearray(data), side_effect=error
-    )
+    tg_file.download_as_bytearray = AsyncMock(return_value=bytearray(data), side_effect=error)
     return tg_file
 
 
@@ -237,9 +235,7 @@ async def test_chats_are_isolated() -> None:
 async def test_verdict_is_logged_with_chat_id(caplog: pytest.LogCaptureFixture) -> None:
     caplog.set_level(logging.INFO, logger="telegram_documentaries")
     deps = make_deps(FakeBouncer(NO_HUMAN))
-    await gateway.on_photo(
-        fake_update(fake_message(photo_size=1), chat_id=777), make_context(deps)
-    )
+    await gateway.on_photo(fake_update(fake_message(photo_size=1), chat_id=777), make_context(deps))
     assert "event=bouncer_verdict" in caplog.text
     assert "chat_id=777" in caplog.text
     assert "human_present=False" in caplog.text
