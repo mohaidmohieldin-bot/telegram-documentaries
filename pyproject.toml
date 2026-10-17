@@ -8,6 +8,7 @@ dependencies = [
     "python-telegram-bot>=22.0",
     "pydantic>=2.7",
     "pydantic-settings>=2.3",
+    "google-adk>=1.10",
 ]
 
 [project.scripts]
@@ -31,6 +32,10 @@ packages = ["src/telegram_documentaries"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
+addopts = "-m 'not live'"
+markers = [
+    "live: calls the real Gemini API (opt-in, run with scripts/test-live)",
+]
 
 [tool.ruff]
 line-length = 100

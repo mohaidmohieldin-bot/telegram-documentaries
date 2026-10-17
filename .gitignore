@@ -13,3 +13,6 @@ dist/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+
+# Live-test images (may contain real faces; never commit)
+tests/live/fixtures/

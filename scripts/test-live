@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+# Run the opt-in live tests against the real Gemini API.
+# Needs GEMINI_API_KEY in .env and images in tests/live/fixtures/ (see README).
+set -euo pipefail
+cd "$(dirname "$0")/.."
+uv run pytest -m live "$@"
