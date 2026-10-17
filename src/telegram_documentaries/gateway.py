@@ -34,7 +34,7 @@ ALREADY_ACCEPTED = (
     "Send another photo if you'd like to start over."
 )
 BOUNCER_REJECTION = (
-    "🚫 Sorry, this is a documentary about *humans*. I see no human here: no face, no body, "
+    "🚫 Sorry, this is a documentary about HUMANS. I see no human here: no face, no body, "
     "not even a suspicious elbow. Our nature crew only films people, so please send a "
     "photo with a real human in it."
 )
