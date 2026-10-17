@@ -27,6 +27,10 @@ logger = logging.getLogger(__name__)
 
 DEPS_KEY = "deps"
 
+# Generated portraits are multi-megabyte; python-telegram-bot's 5 s default makes the bot
+# time out even though Telegram accepts the photo (seen live on 2026-10-18).
+PHOTO_UPLOAD_TIMEOUT_S = 60.0
+
 # --- User-facing replies -------------------------------------------------------------
 
 NUDGE_SEND_PHOTO = "Welcome to The Telegram Documentaries! 🎬 Send me a photo of yourself to begin."
@@ -315,7 +319,12 @@ async def deliver_portrait(message: Message, chat_id: int, deps: Deps) -> None:
         await message.reply_text(CONVERTER_FAILED)
         return
 
-    await message.reply_photo(photo=portrait.data, caption=format_caption(handoff.dossier))
+    await message.reply_photo(
+        photo=portrait.data,
+        caption=format_caption(handoff.dossier),
+        write_timeout=PHOTO_UPLOAD_TIMEOUT_S,
+        read_timeout=PHOTO_UPLOAD_TIMEOUT_S,
+    )
     deps.sessions.deliver_portrait(chat_id)
     logger.info(
         "event=portrait_delivered chat_id=%s animal=%r", chat_id, handoff.dossier.suggested_animal

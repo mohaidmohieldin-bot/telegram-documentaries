@@ -257,7 +257,10 @@ async def test_full_interview_resumes_across_messages_and_delivers_portrait(
         assert expected in texts[0]
 
     finale.reply_photo.assert_awaited_once_with(
-        photo=PORTRAIT.data, caption=gateway.format_caption(DOSSIER)
+        photo=PORTRAIT.data,
+        caption=gateway.format_caption(DOSSIER),
+        write_timeout=gateway.PHOTO_UPLOAD_TIMEOUT_S,
+        read_timeout=gateway.PHOTO_UPLOAD_TIMEOUT_S,
     )
     assert converter.handoffs == [InterviewHandoff(photo=PHOTO, dossier=DOSSIER)]
 
@@ -267,6 +270,12 @@ async def test_full_interview_resumes_across_messages_and_delivers_portrait(
     assert "event=interview_handoff_ready chat_id=42" in caplog.text
     assert "event=portrait_delivered chat_id=42 animal='raccoon'" in caplog.text
     assert "PNG-hybrid" not in caplog.text  # portrait bytes never logged
+
+
+def test_photo_upload_allows_time_for_large_portraits() -> None:
+    # python-telegram-bot defaults to 5 s, which large generated images exceed: the photo
+    # arrives but the bot times out and the session wrongly stays undelivered.
+    assert gateway.PHOTO_UPLOAD_TIMEOUT_S >= 60
 
 
 def test_caption_names_the_animal() -> None:
