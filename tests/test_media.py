@@ -3,7 +3,8 @@
 import pytest
 from pydantic import ValidationError
 
-from telegram_documentaries.media import MAX_IMAGE_BYTES, ImageInput, PortraitImage
+from telegram_documentaries.media import MAX_IMAGE_BYTES, ImageInput, PortraitImage, VoiceoverAudio
+from tests.audio_fakes import make_wav
 
 
 @pytest.mark.parametrize("mime", ["image/jpeg", "image/png", "image/webp", "image/heic"])
@@ -62,3 +63,29 @@ def test_portrait_rejects_empty_or_oversized(data: bytes) -> None:
 
 def test_portrait_repr_does_not_dump_bytes() -> None:
     assert "PIXELS" not in repr(PortraitImage(data=b"PIXELS" * 5, mime_type="image/png"))
+
+
+# --- VoiceoverAudio (Narrator output) ------------------------------------------------
+
+
+@pytest.mark.parametrize("seconds", [1.0, 30.0, 120.0])
+def test_voiceover_accepts_wav_within_limits(seconds: float) -> None:
+    audio = VoiceoverAudio(data=make_wav(seconds))
+    assert audio.duration_s == pytest.approx(seconds)
+    assert audio.mime_type == "audio/wav"
+
+
+@pytest.mark.parametrize("seconds", [0.0, 0.5, 121.0])
+def test_voiceover_rejects_too_short_or_too_long(seconds: float) -> None:
+    with pytest.raises(ValidationError, match="seconds"):
+        VoiceoverAudio(data=make_wav(seconds))
+
+
+@pytest.mark.parametrize("data", [b"", b"ID3-this-is-an-mp3", b"RIFF\x00\x00\x00\x00WAVEbroken"])
+def test_voiceover_rejects_non_wav_bytes(data: bytes) -> None:
+    with pytest.raises(ValidationError):
+        VoiceoverAudio(data=data)
+
+
+def test_voiceover_repr_does_not_dump_bytes() -> None:
+    assert "RIFF" not in repr(VoiceoverAudio(data=make_wav(1.0)))

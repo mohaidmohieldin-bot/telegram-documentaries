@@ -4,12 +4,13 @@ A Telegram bot that turns you into the star of a comedy wildlife documentary.
 Send it a portrait, answer a short interview, and get back a portrait of yourself
 as a human–animal hybrid plus a dramatic British-documentary voiceover.
 
-**Current status: Phase 5 (the Scripter).** Send the bot a selfie. A Gemini 3.1
-Flash-Lite vision agent (Google ADK) checks there's a real human in it, the Interviewer
-asks 5–7 playful questions one at a time and writes field notes with your spirit
-animal, the Converter (Gemini 3.1 Flash Image) sends a photorealistic hybrid portrait,
-and the Scripter writes a hushed 60–90 word nature-documentary narration about you.
-The spoken voiceover (Phase 6) comes next. See [`SPECS/ROADMAP.md`](SPECS/ROADMAP.md).
+**Current status: Phase 6 (the Narrator): the full documentary works end to end.**
+Send the bot a selfie. A Gemini 3.1 Flash-Lite vision agent (Google ADK) checks there's a
+real human in it, the Interviewer asks 5–7 playful questions one at a time and writes
+field notes with your spirit animal, the Converter (Gemini 3.1 Flash Image) sends a
+photorealistic hybrid portrait, the Scripter writes a hushed 60–90 word narration, and
+the Narrator (Gemini 3.8 Flash TTS) voices it as `voiceover.wav`. Phase 7 (resilience:
+`/start`, `/restart`, guards) is next. See [`SPECS/ROADMAP.md`](SPECS/ROADMAP.md).
 
 ## Setup
 
@@ -66,11 +67,11 @@ tests/live/fixtures/person.jpg      a photo with a clearly visible person
 tests/live/fixtures/landscape.jpg   a landscape or object, no people
 ```
 
-That folder is git-ignored so personal photos never reach the repo. The Converter's live
-test saves its generated portrait to `tests/live/output/` (also git-ignored) so you can
-look at it. Tests skip with a
+That folder is git-ignored so personal photos never reach the repo. The Converter's and
+Narrator's live tests save `portrait.*` and `voiceover.wav` to `tests/live/output/` (also
+git-ignored) so you can look and listen. Tests skip with a
 message if the key or an image is missing. A run makes about a dozen small paid text calls (Bouncer checks, a scripted
-interview and a narration) and one image generation, which costs more than the text calls.
+interview and a narration), one image generation and one speech generation, which cost more than the text calls.
 
 ## Project layout
 
@@ -84,6 +85,7 @@ src/telegram_documentaries/
   interviewer.py    orchestrator: question-writer + profiler agents, 5–7 questions
   converter.py      ADK image agent: photo + field notes → hybrid portrait
   scripter.py       ADK agent: field notes + answers → 60–90 word narration
+  narrator.py       Gemini TTS (not an agent): narration → WAV voiceover
   session.py        in-memory, per-chat session state (single state driver)
   media.py          ImageInput contract for images sent to Gemini
   logging_setup.py  key=value logging, logged_stage decorator, token kept out of logs

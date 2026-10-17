@@ -1,8 +1,10 @@
-"""Typed contract for images passed from Telegram to the Gemini stages."""
+"""Typed contracts for media flowing between Telegram and the Gemini stages."""
 
+import io
+import wave
 from typing import Literal, get_args
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 # Telegram bots can download files up to 20 MB, which is also well within Gemini's
 # inline-image limits.
@@ -27,3 +29,41 @@ class PortraitImage(BaseModel):
 
     data: bytes = Field(min_length=1, max_length=MAX_IMAGE_BYTES, repr=False)
     mime_type: Literal["image/png", "image/jpeg", "image/webp"]
+
+
+MIN_VOICEOVER_S = 1.0
+MAX_VOICEOVER_S = 120.0
+
+
+def _wav_duration_s(data: bytes) -> float:
+    with wave.open(io.BytesIO(data), "rb") as wav:
+        return wav.getnframes() / wav.getframerate()
+
+
+class VoiceoverAudio(BaseModel):
+    """The Narrator's spoken voiceover: a WAV file between 1 and 120 seconds long."""
+
+    model_config = ConfigDict(frozen=True)
+
+    data: bytes = Field(min_length=1, max_length=MAX_IMAGE_BYTES, repr=False)
+    mime_type: Literal["audio/wav"] = "audio/wav"
+
+    @field_validator("data")
+    @classmethod
+    def _valid_wav_of_sane_length(cls, data: bytes) -> bytes:
+        if not (data.startswith(b"RIFF") and data[8:12] == b"WAVE"):
+            raise ValueError("audio is not a WAV file")
+        try:
+            duration = _wav_duration_s(data)
+        except (wave.Error, EOFError, ZeroDivisionError) as exc:
+            raise ValueError(f"audio is not a readable WAV file: {exc}") from exc
+        if not MIN_VOICEOVER_S <= duration <= MAX_VOICEOVER_S:
+            raise ValueError(
+                f"voiceover lasts {duration:.1f} seconds; "
+                f"it needs {MIN_VOICEOVER_S:.0f}-{MAX_VOICEOVER_S:.0f}"
+            )
+        return data
+
+    @property
+    def duration_s(self) -> float:
+        return _wav_duration_s(self.data)

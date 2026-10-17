@@ -1,4 +1,4 @@
-"""Session state v4: phases, interview/portrait/script transitions, handoff, contracts."""
+"""Session state v5: phases and transitions through DONE, handoff, and the contracts."""
 
 import pytest
 from pydantic import ValidationError
@@ -40,7 +40,7 @@ def interviewing(store: SessionStore, chat_id: int = 1) -> SessionStore:
 def test_new_chat_starts_awaiting_photo_with_empty_state() -> None:
     session = SessionStore().get(1)
     assert session == Session(chat_id=1)
-    assert session.schema_version == 4
+    assert session.schema_version == 5
     assert session.script is None
     assert session.phase is Phase.AWAITING_PHOTO
     assert session.photo is None
@@ -224,6 +224,43 @@ def test_handoff_available_when_script_ready() -> None:
     store = delivered(SessionStore())
     store.store_script(1, SCRIPT)
     assert store.get(1).handoff().transcript == TRANSCRIPT
+
+
+# --- Finish ------------------------------------------------------------------------------------
+
+
+def scripted(store: SessionStore, chat_id: int = 1) -> SessionStore:
+    delivered(store, chat_id).store_script(chat_id, SCRIPT)
+    return store
+
+
+def test_finish_after_script() -> None:
+    store = scripted(SessionStore())
+    session = store.finish(1)
+    assert session.phase is Phase.DONE
+    assert session.script == SCRIPT
+    assert session.handoff() == HANDOFF
+
+
+@pytest.mark.parametrize("setup", ["fresh", "completed", "delivered", "done"])
+def test_finish_from_wrong_phase_is_invalid(setup: str) -> None:
+    store = SessionStore()
+    if setup == "completed":
+        completed(store)
+    elif setup == "delivered":
+        delivered(store)
+    elif setup == "done":
+        scripted(store).finish(1)
+    with pytest.raises(InvalidTransition):
+        store.finish(1)
+
+
+def test_new_interview_after_done() -> None:
+    store = scripted(SessionStore())
+    store.finish(1)
+    session = store.start_interview(1, PHOTO, "Again?")
+    assert session.phase is Phase.INTERVIEWING
+    assert session.script is None
 
 
 # --- NarrationScript contract ------------------------------------------------------------------
