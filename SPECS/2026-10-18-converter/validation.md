@@ -11,11 +11,13 @@ Merge when every box is ticked.
 
 ## Manual (on Telegram, bot running locally)
 
+Items marked *(tests)* were accepted on mocked-test coverage instead of a hand check, at the user's request (2026-10-18). The user also approved the upload-timeout addition.
+
 - [x] Selfie → interview → field notes ending "Developing your hybrid portrait now…".
 - [x] A hybrid portrait arrives as a photo, captioned `📸 Exhibit A: Homo sapiens × <animal>`,
       followed by "narration coming soon".
-- [ ] Text afterwards → "narration coming soon" reply; a new selfie starts over.
-- [ ] Logs show `stage=converter` with `duration_ms` and `event=portrait_delivered`.
+- [x] *(tests)* Text afterwards → "narration coming soon" reply; a new selfie starts over.
+- [x] *(tests)* Logs show `stage=converter` with `duration_ms` and `event=portrait_delivered`.
 
 ## Contract and policy checks
 

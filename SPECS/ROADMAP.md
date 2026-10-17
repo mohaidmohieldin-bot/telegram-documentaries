@@ -47,7 +47,7 @@ session resets; tests cover both with the model mocked.
 no cross-chat leakage, and the final dossier and animal are validated models.
 **Serves:** happy path.
 
-## Phase 4 — Converter `[ ]`
+## Phase 4 — Converter `[x]`
 
 - Original photo + dossier → Gemini 3.1 Flash Image → hybrid portrait.
 - Image sent directly to the chat (no intermediate text hop).
