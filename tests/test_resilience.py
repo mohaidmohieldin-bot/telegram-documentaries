@@ -10,15 +10,14 @@ from telegram import BotCommand, Update
 from telegram.error import NetworkError
 
 from telegram_documentaries import gateway
+from telegram_documentaries.gateway import Deps, build_application
 from telegram_documentaries.session import Phase, Session
 from tests.test_gateway import (
     FAKE_TOKEN,
     PHOTO,
-    Deps,
     FakeBouncer,
     FakeInterviewer,
     ask,
-    build_application,
     completed,
     fake_message,
     fake_update,
