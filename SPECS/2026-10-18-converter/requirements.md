@@ -61,6 +61,10 @@ with no intermediate text hop).
      interview (as before).
    - If sending the photo to Telegram fails, the error handler logs it and the phase
      stays `INTERVIEW_COMPLETE`, so the next message retries.
+   - Photo uploads use a 60 s read/write timeout (`PHOTO_UPLOAD_TIMEOUT_S`). *Added
+     during validation:* with python-telegram-bot's 5 s default, a multi-megabyte
+     portrait reached the chat but the bot raised `TimedOut`, leaving the session
+     undelivered and set to re-send.
 6. **Tests:** Red/Green TDD with mocks for all of the above. An opt-in live test
    converts `tests/live/fixtures/person.jpg` with a fixed Dossier and saves the result to
    `tests/live/output/portrait.*` (git-ignored) for a visual check.
