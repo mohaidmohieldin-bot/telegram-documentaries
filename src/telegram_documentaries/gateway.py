@@ -14,9 +14,9 @@ from dataclasses import dataclass
 from typing import Any
 
 from pydantic import ValidationError
-from telegram import File, Message, Update
+from telegram import BotCommand, File, Message, Update
 from telegram.error import TelegramError
-from telegram.ext import Application, ContextTypes, MessageHandler, filters
+from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
 
 from telegram_documentaries.bouncer import Bouncer, BouncerError
 from telegram_documentaries.converter import ConverterError, ConverterPort
@@ -38,13 +38,21 @@ logger = logging.getLogger(__name__)
 
 DEPS_KEY = "deps"
 
-# Generated portraits and voiceovers are multi-megabyte; python-telegram-bot's 5 s default
+# Photos, portraits and voiceovers are multi-megabyte; python-telegram-bot's 5 s default
 # makes the bot time out even though Telegram accepts the upload (seen live on 2026-10-18).
-PHOTO_UPLOAD_TIMEOUT_S = 60.0
+# Applies to downloading the user's photo as well as to uploads.
+MEDIA_TRANSFER_TIMEOUT_S = 60.0
 
 # --- User-facing replies -------------------------------------------------------------
 
 NUDGE_SEND_PHOTO = "Welcome to The Telegram Documentaries! 🎬 Send me a photo of yourself to begin."
+CLEAN_SLATE = (
+    "🧹 Clean slate! Everything from your last documentary is gone. "
+    "Send me a photo of yourself to begin a new one."
+)
+SOMETHING_WENT_WRONG = "Something went wrong on set. 🎬 Send /restart to start over."
+START_DESCRIPTION = "Begin a new documentary"
+RESTART_DESCRIPTION = "Wipe everything and start over"
 PHOTO_ACCEPTED = (
     "A magnificent specimen! 🦁 You've made it past the Bouncer. "
     "Now for your interview: just answer each question in your own words."
@@ -187,7 +195,7 @@ async def download_image(message: Message) -> ImageInput:
     Raises PhotoTooLarge / UnsupportedImage before downloading, TelegramError if the
     download fails, and ValidationError if the downloaded bytes break the contract.
     """
-    get_file: Callable[[], Awaitable[File]]
+    get_file: Callable[..., Awaitable[File]]
     file_size: int | None
     mime_type: str
     if message.photo:
@@ -207,8 +215,8 @@ async def download_image(message: Message) -> ImageInput:
     if file_size is not None and file_size > MAX_IMAGE_BYTES:
         raise PhotoTooLarge(file_size)
 
-    tg_file = await get_file()
-    data = bytes(await tg_file.download_as_bytearray())
+    tg_file = await get_file(read_timeout=MEDIA_TRANSFER_TIMEOUT_S)
+    data = bytes(await tg_file.download_as_bytearray(read_timeout=MEDIA_TRANSFER_TIMEOUT_S))
     return ImageInput.model_validate({"data": data, "mime_type": mime_type})
 
 
@@ -359,8 +367,8 @@ async def deliver_portrait(message: Message, chat_id: int, deps: Deps) -> None:
     await message.reply_photo(
         photo=portrait.data,
         caption=format_caption(handoff.dossier),
-        write_timeout=PHOTO_UPLOAD_TIMEOUT_S,
-        read_timeout=PHOTO_UPLOAD_TIMEOUT_S,
+        write_timeout=MEDIA_TRANSFER_TIMEOUT_S,
+        read_timeout=MEDIA_TRANSFER_TIMEOUT_S,
     )
     deps.sessions.deliver_portrait(chat_id)
     logger.info(
@@ -401,16 +409,58 @@ async def deliver_voiceover(message: Message, chat_id: int, deps: Deps) -> None:
         document=audio.data,
         filename=VOICEOVER_FILENAME,
         caption=VOICEOVER_CAPTION,
-        write_timeout=PHOTO_UPLOAD_TIMEOUT_S,
-        read_timeout=PHOTO_UPLOAD_TIMEOUT_S,
+        write_timeout=MEDIA_TRANSFER_TIMEOUT_S,
+        read_timeout=MEDIA_TRANSFER_TIMEOUT_S,
     )
     deps.sessions.finish(chat_id)
     logger.info("event=voiceover_delivered chat_id=%s seconds=%.1f", chat_id, audio.duration_s)
     await message.reply_text(THATS_A_WRAP)
 
 
+async def _reset(update: Update, context: ContextTypes.DEFAULT_TYPE, reply: str) -> None:
+    message, chat = update.effective_message, update.effective_chat
+    if message is None or chat is None:
+        return
+    sessions = get_deps(context).sessions
+    from_phase = sessions.get(chat.id).phase
+    sessions.reset(chat.id)
+    command = (message.text or "").split(maxsplit=1)[0] if message.text else "?"
+    logger.info(
+        "event=session_reset command=%s chat_id=%s from_phase=%s",
+        command,
+        chat.id,
+        from_phase.value,
+    )
+    await message.reply_text(reply)
+
+
+@log_update
+async def on_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/start: wipe the session (photo, interview, portrait, script) and welcome the user."""
+    await _reset(update, context, NUDGE_SEND_PHOTO)
+
+
+@log_update
+async def on_restart(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """/restart: wipe the session from any phase. Media only ever lives in memory."""
+    await _reset(update, context, CLEAN_SLATE)
+
+
+async def register_commands(application: Application) -> None:  # type: ignore[type-arg]
+    """post_init hook: list /start and /restart in Telegram's command menu."""
+    commands = [
+        BotCommand("start", START_DESCRIPTION),
+        BotCommand("restart", RESTART_DESCRIPTION),
+    ]
+    try:
+        await application.bot.set_my_commands(commands)
+    except TelegramError as exc:
+        # Non-critical and user-invisible: the commands still work when typed.
+        logger.warning("event=command_menu_failed error=%r", exc)
+
+
 async def log_error(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Log any exception raised while handling an update, loudly and with context."""
+    """Log any unexpected exception loudly, and tell the user how to get going again."""
     update_id = update.update_id if isinstance(update, Update) else None
     logger.error(
         "event=handler_error update_id=%s error=%r",
@@ -418,13 +468,22 @@ async def log_error(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
         context.error,
         exc_info=context.error,
     )
+    message = update.effective_message if isinstance(update, Update) else None
+    if message is None:
+        return
+    try:
+        await message.reply_text(SOMETHING_WENT_WRONG)
+    except TelegramError as exc:
+        logger.error("event=error_reply_failed update_id=%s error=%r", update_id, exc)
 
 
 def build_application(token: str, deps: Deps) -> Application:  # type: ignore[type-arg]
     """Wire the bot: photos and image files to on_photo, other new messages to on_other."""
-    app = Application.builder().token(token).build()
+    app = Application.builder().token(token).post_init(register_commands).build()
     app.bot_data[DEPS_KEY] = deps
     new_message = filters.UpdateType.MESSAGE
+    app.add_handler(CommandHandler("start", on_start, filters=new_message))
+    app.add_handler(CommandHandler("restart", on_restart, filters=new_message))
     images = filters.PHOTO | filters.Document.IMAGE
     app.add_handler(MessageHandler(new_message & images, on_photo))
     app.add_handler(MessageHandler(new_message, on_other))
