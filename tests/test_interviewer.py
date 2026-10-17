@@ -34,9 +34,7 @@ def transcript(n: int) -> tuple[QA, ...]:
 
 
 def interviewer(questions: FakeRunner, profiles: FakeRunner | None = None) -> Interviewer:
-    return Interviewer(
-        questions.as_runner(), (profiles or FakeRunner()).as_runner(), timeout_s=5.0
-    )
+    return Interviewer(questions.as_runner(), (profiles or FakeRunner()).as_runner(), timeout_s=5.0)
 
 
 # --- Agents ----------------------------------------------------------------------------
