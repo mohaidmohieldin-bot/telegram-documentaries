@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+# Run the test suite. Extra arguments are passed to pytest, e.g. scripts/test -k gateway
+set -euo pipefail
+cd "$(dirname "$0")/.."
+uv run pytest "$@"

@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+# Strict type check of the package and tests.
+set -euo pipefail
+cd "$(dirname "$0")/.."
+uv run mypy

@@ -10,7 +10,7 @@ Status key: `[ ]` not started · `[~]` in progress · `[x]` verified complete
 
 ---
 
-## Phase 1 — Repository & gateway `[ ]`
+## Phase 1 — Repository & gateway `[x]`
 
 Project skeleton and a working Telegram connection.
 
