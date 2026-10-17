@@ -25,7 +25,7 @@ Project skeleton and a working Telegram connection.
 and all scripts pass.
 **Serves:** happy path (foundation), secrets non-negotiable.
 
-## Phase 2 — Bouncer `[ ]`
+## Phase 2 — Bouncer `[x]`
 
 - Session store and state machine introduced, starting in `AWAITING_PHOTO`.
 - Photo → Gemini 3.1 Flash Lite vision check → typed yes/no result.

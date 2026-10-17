@@ -1,0 +1,20 @@
+"""Typed contract for images passed from Telegram to the Gemini stages."""
+
+from typing import Literal, get_args
+
+from pydantic import BaseModel, ConfigDict, Field
+
+# Telegram bots can download files up to 20 MB, which is also well within Gemini's
+# inline-image limits.
+MAX_IMAGE_BYTES = 20 * 1024 * 1024
+
+# Image types Gemini accepts as input.
+ImageMimeType = Literal["image/jpeg", "image/png", "image/webp", "image/heic", "image/heif"]
+SUPPORTED_IMAGE_TYPES: frozenset[str] = frozenset(get_args(ImageMimeType))
+
+
+class ImageInput(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    data: bytes = Field(min_length=1, max_length=MAX_IMAGE_BYTES, repr=False)
+    mime_type: ImageMimeType
