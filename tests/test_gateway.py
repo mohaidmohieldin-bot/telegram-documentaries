@@ -1,4 +1,4 @@
-"""Gateway routing: Bouncer, one-question-per-turn interview, finale, portrait, narration."""
+"""Gateway routing: Bouncer, interview, finale, portrait, narration script and voiceover."""
 
 import logging
 from collections.abc import Sequence
@@ -15,7 +15,8 @@ from telegram_documentaries.bouncer import BouncerError, BouncerVerdict
 from telegram_documentaries.converter import ConverterError
 from telegram_documentaries.gateway import DEPS_KEY, Deps, build_application
 from telegram_documentaries.interviewer import InterviewerError, NextQuestion
-from telegram_documentaries.media import MAX_IMAGE_BYTES, ImageInput, PortraitImage
+from telegram_documentaries.media import MAX_IMAGE_BYTES, ImageInput, PortraitImage, VoiceoverAudio
+from telegram_documentaries.narrator import NarratorError
 from telegram_documentaries.scripter import ScripterError
 from telegram_documentaries.session import (
     QA,
@@ -25,6 +26,7 @@ from telegram_documentaries.session import (
     Phase,
     SessionStore,
 )
+from tests.audio_fakes import make_wav
 
 FAKE_TOKEN = "123456789:AAH-fake-token-for-tests"
 PHOTO_BYTES = b"\xff\xd8person-or-landscape"
@@ -97,6 +99,24 @@ PORTRAIT = PortraitImage(data=b"\x89PNG-hybrid", mime_type="image/png")
 SCRIPT = NarrationScript(text=" ".join(["Here, in the hush of dusk, the raccoon stirs."] * 7))
 
 
+VOICEOVER = VoiceoverAudio(data=make_wav(25.0))
+
+
+class FakeNarrator:
+    """Returns scripted voiceovers or errors; records every script it narrated."""
+
+    def __init__(self, *results: VoiceoverAudio | Exception) -> None:
+        self.results = list(results) or [VOICEOVER]
+        self.scripts: list[NarrationScript] = []
+
+    async def narrate(self, script: NarrationScript) -> VoiceoverAudio:
+        self.scripts.append(script)
+        result = self.results.pop(0)
+        if isinstance(result, Exception):
+            raise result
+        return result
+
+
 class FakeScripter:
     """Returns scripted narrations or errors; records every handoff it received."""
 
@@ -136,6 +156,7 @@ def fake_message(
     message = MagicMock()
     message.reply_text = AsyncMock()
     message.reply_photo = AsyncMock()
+    message.reply_document = AsyncMock()
     message.text = text
     message.photo = ()
     message.document = None
@@ -166,12 +187,14 @@ def make_deps(
     interviewer: FakeInterviewer | None = None,
     converter: FakeConverter | None = None,
     scripter: FakeScripter | None = None,
+    narrator: FakeNarrator | None = None,
 ) -> Deps:
     return Deps(
         bouncer=bouncer or FakeBouncer(),
         interviewer=interviewer or FakeInterviewer(),
         converter=converter or FakeConverter(),
         scripter=scripter or FakeScripter(),
+        narrator=narrator or FakeNarrator(),
         sessions=SessionStore(),
     )
 
@@ -269,7 +292,8 @@ async def test_full_run_delivers_portrait_then_narration(
     interviewer = FakeInterviewer("Q1?", ask("Q2?"), ask("Q3?"), ask("Q4?"), ask("Q5?"), DOSSIER)
     converter = FakeConverter(PORTRAIT)
     scripter = FakeScripter(SCRIPT)
-    deps = make_deps(FakeBouncer(HUMAN), interviewer, converter, scripter)
+    narrator = FakeNarrator(VOICEOVER)
+    deps = make_deps(FakeBouncer(HUMAN), interviewer, converter, scripter, narrator)
     await send_photo(deps)
 
     for n in range(1, 5):
@@ -282,9 +306,17 @@ async def test_full_run_delivers_portrait_then_narration(
     assert texts == [
         gateway.format_finale(DOSSIER),
         gateway.format_script(SCRIPT),
-        gateway.VOICEOVER_COMING_SOON,
+        gateway.THATS_A_WRAP,
     ]
     assert SCRIPT.text in texts[1]
+    finale.reply_document.assert_awaited_once_with(
+        document=VOICEOVER.data,
+        filename="voiceover.wav",
+        caption=gateway.VOICEOVER_CAPTION,
+        write_timeout=gateway.PHOTO_UPLOAD_TIMEOUT_S,
+        read_timeout=gateway.PHOTO_UPLOAD_TIMEOUT_S,
+    )
+    assert narrator.scripts == [SCRIPT]
     for expected in (DOSSIER.profile, "hums while thinking", "raccoon", "Developing"):
         assert expected in texts[0]
 
@@ -298,12 +330,13 @@ async def test_full_run_delivers_portrait_then_narration(
     handoff = InterviewHandoff(photo=PHOTO, dossier=DOSSIER, transcript=session.transcript)
     assert converter.handoffs == [handoff]
     assert scripter.handoffs == [handoff]
-    assert session.phase is Phase.SCRIPT_READY
+    assert session.phase is Phase.DONE
     assert session.script == SCRIPT
     assert [qa.answer for qa in session.transcript] == [f"Answer {n}" for n in range(1, 6)]
     assert "event=interview_handoff_ready chat_id=42" in caplog.text
     assert "event=portrait_delivered chat_id=42 animal='raccoon'" in caplog.text
     assert "event=script_ready chat_id=42 words=63" in caplog.text
+    assert "event=voiceover_delivered chat_id=42 seconds=25.0" in caplog.text
     assert "PNG-hybrid" not in caplog.text  # portrait bytes never logged
 
 
@@ -396,11 +429,11 @@ async def test_any_text_after_failure_retries_the_portrait() -> None:
     assert replies(message) == [
         gateway.RETRYING_PORTRAIT,
         gateway.format_script(SCRIPT),
-        gateway.VOICEOVER_COMING_SOON,
+        gateway.THATS_A_WRAP,
     ]
     message.reply_photo.assert_awaited_once()
     assert len(converter.handoffs) == 1
-    assert deps.sessions.get(42).phase is Phase.SCRIPT_READY
+    assert deps.sessions.get(42).phase is Phase.DONE
 
 
 async def test_failed_retry_stays_retryable() -> None:
@@ -449,11 +482,11 @@ async def test_text_after_script_failure_retries_only_the_script() -> None:
     assert replies(message) == [
         gateway.RETRYING_SCRIPT,
         gateway.format_script(SCRIPT),
-        gateway.VOICEOVER_COMING_SOON,
+        gateway.THATS_A_WRAP,
     ]
     message.reply_photo.assert_not_awaited()
     assert converter.handoffs == []
-    assert deps.sessions.get(42).phase is Phase.SCRIPT_READY
+    assert deps.sessions.get(42).phase is Phase.DONE
 
 
 async def test_failed_script_retry_stays_retryable() -> None:
@@ -463,22 +496,81 @@ async def test_failed_script_retry_stays_retryable() -> None:
     assert deps.sessions.get(42).phase is Phase.PORTRAIT_DELIVERED
 
 
-async def test_text_after_script_gets_coming_soon_reply() -> None:
+# --- Voiceover: failure, retry, afterwards ---------------------------------------------------
+
+
+def script_ready(deps: Deps) -> Deps:
+    portrait_delivered(deps).sessions.store_script(42, SCRIPT)
+    return deps
+
+
+async def test_narrator_failure_keeps_script_and_invites_retry(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    narrator = FakeNarrator(NarratorError("TTS returned no audio"))
+    deps = portrait_delivered(make_deps(narrator=narrator))
+    message = await send_text(deps, "go")  # retries the script, which succeeds
+
+    assert replies(message) == [
+        gateway.RETRYING_SCRIPT,
+        gateway.format_script(SCRIPT),
+        gateway.NARRATOR_FAILED,
+    ]
+    message.reply_document.assert_not_awaited()
+    session = deps.sessions.get(42)
+    assert session.phase is Phase.SCRIPT_READY
+    assert session.script == SCRIPT
+    assert "event=narrator_failed chat_id=42" in caplog.text
+
+
+async def test_text_after_narrator_failure_retries_only_the_voiceover() -> None:
     scripter = FakeScripter()
-    deps = portrait_delivered(make_deps(scripter=scripter))
-    deps.sessions.store_script(42, SCRIPT)
-    message = await send_text(deps, "hello?")
-    assert replied(message) == gateway.VOICEOVER_COMING_SOON
+    narrator = FakeNarrator(VOICEOVER)
+    deps = script_ready(make_deps(scripter=scripter, narrator=narrator))
+    message = await send_text(deps, "again")
+
+    assert replies(message) == [gateway.RETRYING_VOICEOVER, gateway.THATS_A_WRAP]
+    message.reply_document.assert_awaited_once()
+    message.reply_photo.assert_not_awaited()
     assert scripter.handoffs == []
+    assert narrator.scripts == [SCRIPT]
+    assert deps.sessions.get(42).phase is Phase.DONE
 
 
-@pytest.mark.parametrize("stage", ["completed", "portrait", "script"])
+async def test_failed_voiceover_retry_stays_retryable() -> None:
+    deps = script_ready(make_deps(narrator=FakeNarrator(NarratorError("timed out"))))
+    message = await send_text(deps, "again")
+    assert replies(message) == [gateway.RETRYING_VOICEOVER, gateway.NARRATOR_FAILED]
+    assert deps.sessions.get(42).phase is Phase.SCRIPT_READY
+
+
+async def test_telegram_upload_failure_leaves_voiceover_retryable() -> None:
+    deps = script_ready(make_deps())
+    message = fake_message(text="again")
+    message.reply_document = AsyncMock(side_effect=NetworkError("upload failed"))
+    with pytest.raises(NetworkError):  # the application's error handler logs it
+        await gateway.on_other(fake_update(message), make_context(deps))
+    assert deps.sessions.get(42).phase is Phase.SCRIPT_READY
+
+
+async def test_text_when_done_gets_wrap_reply() -> None:
+    narrator = FakeNarrator()
+    deps = script_ready(make_deps(narrator=narrator))
+    deps.sessions.finish(42)
+    message = await send_text(deps, "hello?")
+    assert replied(message) == gateway.THATS_A_WRAP
+    assert narrator.scripts == []
+
+
+@pytest.mark.parametrize("stage", ["completed", "portrait", "script", "done"])
 async def test_new_photo_after_interview_starts_fresh(stage: str) -> None:
     deps = completed(make_deps(interviewer=FakeInterviewer("Fresh Q?")))
-    if stage in ("portrait", "script"):
+    if stage in ("portrait", "script", "done"):
         deps.sessions.deliver_portrait(42)
-    if stage == "script":
+    if stage in ("script", "done"):
         deps.sessions.store_script(42, SCRIPT)
+    if stage == "done":
+        deps.sessions.finish(42)
     message = await send_photo(deps)
     assert replies(message)[-1] == gateway.format_question(1, "Fresh Q?")
     session = deps.sessions.get(42)

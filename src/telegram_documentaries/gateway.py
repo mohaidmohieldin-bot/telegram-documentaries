@@ -3,8 +3,8 @@
 Photos (and images sent as files) go to the Bouncer. A human starts the interview:
 each text answer gets exactly one next question until the Interviewer returns the
 Dossier. The field notes are shown, then the Converter turns the photo and Dossier into
-a hybrid portrait, and the Scripter writes the narration. If either fails, any message
-retries just the stage that failed.
+a hybrid portrait, the Scripter writes the narration and the Narrator voices it. If a
+stage fails, any message retries just that stage.
 """
 
 import functools
@@ -22,11 +22,13 @@ from telegram_documentaries.bouncer import Bouncer, BouncerError
 from telegram_documentaries.converter import ConverterError, ConverterPort
 from telegram_documentaries.interviewer import InterviewerError, InterviewerPort, NextQuestion
 from telegram_documentaries.media import MAX_IMAGE_BYTES, SUPPORTED_IMAGE_TYPES, ImageInput
+from telegram_documentaries.narrator import NarratorError, NarratorPort
 from telegram_documentaries.scripter import ScripterError, ScripterPort
 from telegram_documentaries.session import (
     MAX_ANSWER_CHARS,
     QA,
     Dossier,
+    InvalidTransition,
     NarrationScript,
     Phase,
     SessionStore,
@@ -36,8 +38,8 @@ logger = logging.getLogger(__name__)
 
 DEPS_KEY = "deps"
 
-# Generated portraits are multi-megabyte; python-telegram-bot's 5 s default makes the bot
-# time out even though Telegram accepts the photo (seen live on 2026-10-18).
+# Generated portraits and voiceovers are multi-megabyte; python-telegram-bot's 5 s default
+# makes the bot time out even though Telegram accepts the upload (seen live on 2026-10-18).
 PHOTO_UPLOAD_TIMEOUT_S = 60.0
 
 # --- User-facing replies -------------------------------------------------------------
@@ -75,9 +77,16 @@ SCRIPTER_FAILED = (
     "The narrator has lost their voice. 🤫 Your portrait is safe. "
     "Send me any message and I'll try writing your narration again."
 )
-VOICEOVER_COMING_SOON = (
-    "🎙️ The voiceover is being recorded. Coming soon! "
-    "Send a new photo any time to start a fresh documentary."
+VOICEOVER_CAPTION = "🎧 Your documentary voiceover"
+VOICEOVER_FILENAME = "voiceover.wav"
+RETRYING_VOICEOVER = "Back in the recording booth… 🎙️ Recording your voiceover again."
+NARRATOR_FAILED = (
+    "The narrator's microphone crackled and died. 🎙️💥 "
+    "Your portrait and script are safe. "
+    "Send me any message and I'll try recording the voiceover again."
+)
+THATS_A_WRAP = (
+    "🎬 That's a wrap on your documentary! Send a new photo any time to star in another one."
 )
 
 
@@ -128,6 +137,7 @@ class Deps:
     interviewer: InterviewerPort
     converter: ConverterPort
     scripter: ScripterPort
+    narrator: NarratorPort
     sessions: SessionStore
 
 
@@ -289,8 +299,12 @@ async def on_other(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await message.reply_text(RETRYING_SCRIPT)
         await deliver_script(message, chat.id, deps)
         return
-    if session.phase is Phase.SCRIPT_READY or session.pending_question is None:
-        await message.reply_text(VOICEOVER_COMING_SOON)
+    if session.phase is Phase.SCRIPT_READY:
+        await message.reply_text(RETRYING_VOICEOVER)
+        await deliver_voiceover(message, chat.id, deps)
+        return
+    if session.phase is Phase.DONE or session.pending_question is None:
+        await message.reply_text(THATS_A_WRAP)
         return
 
     question = session.pending_question
@@ -368,7 +382,31 @@ async def deliver_script(message: Message, chat_id: int, deps: Deps) -> None:
     await message.reply_text(format_script(script))
     deps.sessions.store_script(chat_id, script)
     logger.info("event=script_ready chat_id=%s words=%d", chat_id, script.word_count)
-    await message.reply_text(VOICEOVER_COMING_SOON)
+    await deliver_voiceover(message, chat_id, deps)
+
+
+async def deliver_voiceover(message: Message, chat_id: int, deps: Deps) -> None:
+    """Narrator stage: send the voiceover as a WAV file, or invite a retry if it failed."""
+    script = deps.sessions.get(chat_id).script
+    if script is None:
+        raise InvalidTransition(f"chat {chat_id}: no script to narrate")
+    try:
+        audio = await deps.narrator.narrate(script)
+    except NarratorError as exc:
+        logger.error("event=narrator_failed chat_id=%s error=%r", chat_id, exc)
+        await message.reply_text(NARRATOR_FAILED)
+        return
+
+    await message.reply_document(
+        document=audio.data,
+        filename=VOICEOVER_FILENAME,
+        caption=VOICEOVER_CAPTION,
+        write_timeout=PHOTO_UPLOAD_TIMEOUT_S,
+        read_timeout=PHOTO_UPLOAD_TIMEOUT_S,
+    )
+    deps.sessions.finish(chat_id)
+    logger.info("event=voiceover_delivered chat_id=%s seconds=%.1f", chat_id, audio.duration_s)
+    await message.reply_text(THATS_A_WRAP)
 
 
 async def log_error(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:

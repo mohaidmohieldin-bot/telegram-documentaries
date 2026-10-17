@@ -67,7 +67,8 @@ it is sent to the chat as text.
 
 ## Phase 6 — Narrator `[ ]`
 
-- Script → Gemini TTS (`gemini-3.1-flash-tts-preview`) → OGG/MP3 → audio message.
+- Script → Gemini TTS (`gemini-3.8-flash-tts`) → WAV → sent to the chat as a file.
+  (Model and format changed from the original plan on 2026-10-18; see the Narrator spec.)
 - Temp media cleaned up after delivery; session moves to `DONE`.
 
 **Acceptance:** audio plays in Telegram; the full happy path runs end to end.

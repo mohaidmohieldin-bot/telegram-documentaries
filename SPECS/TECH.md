@@ -13,7 +13,7 @@ enforce these policies; changes require updating this file first.
 | Agent framework | Google Agent Development Kit (ADK) |
 | Bouncer, Interviewer, Scripter | Gemini 3.1 Flash Lite |
 | Converter | Gemini 3.1 Flash Image (native multimodal: photo + dossier → image) |
-| Narrator | Gemini TTS `gemini-3.1-flash-tts-preview` → OGG/MP3 for Telegram |
+| Narrator | Gemini TTS `gemini-3.8-flash-tts` (Interactions API) → WAV, sent as a file |
 | Validation | Pydantic v2 |
 | Tests / lint / types | pytest, ruff, mypy (strict) |
 
@@ -26,7 +26,7 @@ enforce these policies; changes require updating this file first.
   - Converter — returns the hybrid image straight to Telegram, with no
     intermediate text hop.
   - Scripter — one paragraph, ~60–90 words.
-  - Narrator — plain function, not an agent: script → TTS → audio message.
+  - Narrator — plain function, not an agent: script → TTS → WAV voiceover file.
 - **Explicit state machine.** Each session has one phase (e.g.
   `AWAITING_PHOTO`, `INTERVIEWING`, `CONVERTING`, `SCRIPTING`, `NARRATING`,
   `DONE`). Every incoming update is dispatched by phase; each phase declares the
