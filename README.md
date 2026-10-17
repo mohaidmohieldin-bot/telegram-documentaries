@@ -4,11 +4,12 @@ A Telegram bot that turns you into the star of a comedy wildlife documentary.
 Send it a portrait, answer a short interview, and get back a portrait of yourself
 as a human–animal hybrid plus a dramatic British-documentary voiceover.
 
-**Current status: Phase 3 (the Interviewer).** Send the bot a selfie. A Gemini 3.1
-Flash-Lite vision agent (Google ADK) checks there's a real human in it, then the
-Interviewer asks 5–7 playful questions, one at a time. After your last answer you get
-field notes on your quirks and your spirit animal. The hybrid portrait (Phase 4) comes
-next. See [`SPECS/ROADMAP.md`](SPECS/ROADMAP.md).
+**Current status: Phase 4 (the Converter).** Send the bot a selfie. A Gemini 3.1
+Flash-Lite vision agent (Google ADK) checks there's a real human in it, the Interviewer
+asks 5–7 playful questions one at a time and writes field notes with your spirit
+animal, then the Converter (Gemini 3.1 Flash Image) sends you a photorealistic portrait
+of yourself as a human–animal hybrid. Voiceover narration (Phases 5–6) comes next.
+See [`SPECS/ROADMAP.md`](SPECS/ROADMAP.md).
 
 ## Setup
 
@@ -65,9 +66,11 @@ tests/live/fixtures/person.jpg      a photo with a clearly visible person
 tests/live/fixtures/landscape.jpg   a landscape or object, no people
 ```
 
-That folder is git-ignored so personal photos never reach the repo. Tests skip with a
-message if the key or an image is missing. A run makes about ten small paid API calls (two Bouncer checks plus one scripted
-interview, which needs no images).
+That folder is git-ignored so personal photos never reach the repo. The Converter's live
+test saves its generated portrait to `tests/live/output/` (also git-ignored) so you can
+look at it. Tests skip with a
+message if the key or an image is missing. A run makes about ten small paid text calls (two Bouncer checks plus one scripted
+interview) and one image generation, which costs more than the text calls.
 
 ## Project layout
 
@@ -79,6 +82,7 @@ src/telegram_documentaries/
   agents.py         shared ADK caller: throwaway sessions, timeouts, structured output
   bouncer.py        ADK vision agent: does the photo contain a human?
   interviewer.py    orchestrator: question-writer + profiler agents, 5–7 questions
+  converter.py      ADK image agent: photo + field notes → hybrid portrait
   session.py        in-memory, per-chat session state (single state driver)
   media.py          ImageInput contract for images sent to Gemini
   logging_setup.py  key=value logging, logged_stage decorator, token kept out of logs

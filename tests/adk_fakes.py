@@ -16,10 +16,11 @@ class FakeEvent:
         final: bool = True,
         error_code: str | None = None,
         error_message: str | None = None,
+        parts: list[types.Part] | None = None,
     ) -> None:
-        self.content = (
-            types.Content(role="model", parts=[types.Part(text=text)]) if text is not None else None
-        )
+        if parts is None and text is not None:
+            parts = [types.Part(text=text)]
+        self.content = types.Content(role="model", parts=parts) if parts is not None else None
         self._final = final
         self.error_code = error_code
         self.error_message = error_message

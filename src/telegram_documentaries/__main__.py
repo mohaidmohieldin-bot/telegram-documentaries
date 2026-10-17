@@ -8,6 +8,7 @@ from telegram import Update
 
 from telegram_documentaries.bouncer import create_bouncer
 from telegram_documentaries.config import Settings, export_gemini_credentials
+from telegram_documentaries.converter import create_converter
 from telegram_documentaries.gateway import Deps, build_application
 from telegram_documentaries.interviewer import create_interviewer
 from telegram_documentaries.logging_setup import configure_logging
@@ -32,6 +33,7 @@ def main() -> None:
     deps = Deps(
         bouncer=create_bouncer(),
         interviewer=create_interviewer(),
+        converter=create_converter(),
         sessions=SessionStore(),
     )
     app = build_application(settings.telegram_bot_token.get_secret_value(), deps)

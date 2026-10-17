@@ -14,5 +14,6 @@ dist/
 .mypy_cache/
 .ruff_cache/
 
-# Live-test images (may contain real faces; never commit)
+# Live-test images and generated portraits (may contain real faces; never commit)
 tests/live/fixtures/
+tests/live/output/

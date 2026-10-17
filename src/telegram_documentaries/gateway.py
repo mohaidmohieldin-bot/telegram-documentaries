@@ -2,7 +2,8 @@
 
 Photos (and images sent as files) go to the Bouncer. A human starts the interview:
 each text answer gets exactly one next question until the Interviewer returns the
-Dossier, which is shown to the user and stored as the handoff for the next stage.
+Dossier. The field notes are shown, then the Converter turns the photo and Dossier into
+a hybrid portrait sent straight to the chat (any message retries it if it failed).
 """
 
 import functools
@@ -17,6 +18,7 @@ from telegram.error import TelegramError
 from telegram.ext import Application, ContextTypes, MessageHandler, filters
 
 from telegram_documentaries.bouncer import Bouncer, BouncerError
+from telegram_documentaries.converter import ConverterError, ConverterPort
 from telegram_documentaries.interviewer import InterviewerError, InterviewerPort, NextQuestion
 from telegram_documentaries.media import MAX_IMAGE_BYTES, SUPPORTED_IMAGE_TYPES, ImageInput
 from telegram_documentaries.session import MAX_ANSWER_CHARS, QA, Dossier, Phase, SessionStore
@@ -49,8 +51,14 @@ INTERVIEWER_UNAVAILABLE_START = (
 INTERVIEWER_UNAVAILABLE = (
     "Our interviewer dropped their notebook. 📓 Please send your answer again in a moment."
 )
-PORTRAIT_IN_PROGRESS = (
-    "Your hybrid portrait is being developed in the lab. 🖼️ "
+DEVELOPING_PORTRAIT = "📸 Developing your hybrid portrait now…"
+RETRYING_PORTRAIT = "Back to the darkroom! 🎞️ Developing your hybrid portrait again…"
+CONVERTER_FAILED = (
+    "Disaster in the darkroom: the film got soggy. 🎞️💧 Your field notes are safe. "
+    "Send me any message and I'll try developing your portrait again."
+)
+NARRATION_COMING_SOON = (
+    "🎙️ The documentary voiceover is still being recorded. Coming soon! "
     "Send a new photo any time to start a fresh documentary."
 )
 
@@ -81,8 +89,12 @@ def format_finale(dossier: Dossier) -> str:
         f"Observed quirks:\n{quirks}\n\n"
         f"🐾 Your spirit species: the {dossier.suggested_animal}\n"
         f"{dossier.animal_rationale}\n\n"
-        f"{PORTRAIT_IN_PROGRESS}"
+        f"{DEVELOPING_PORTRAIT}"
     )
+
+
+def format_caption(dossier: Dossier) -> str:
+    return f"📸 Exhibit A: Homo sapiens × {dossier.suggested_animal}"
 
 
 # --- Dependencies ------------------------------------------------------------------------
@@ -92,6 +104,7 @@ def format_finale(dossier: Dossier) -> str:
 class Deps:
     bouncer: Bouncer
     interviewer: InterviewerPort
+    converter: ConverterPort
     sessions: SessionStore
 
 
@@ -245,8 +258,12 @@ async def on_other(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if session.phase is Phase.AWAITING_PHOTO:
         await message.reply_text(NUDGE_SEND_PHOTO)
         return
-    if session.phase is Phase.INTERVIEW_COMPLETE or session.pending_question is None:
-        await message.reply_text(PORTRAIT_IN_PROGRESS)
+    if session.phase is Phase.INTERVIEW_COMPLETE:
+        await message.reply_text(RETRYING_PORTRAIT)
+        await deliver_portrait(message, chat.id, deps)
+        return
+    if session.phase is Phase.PORTRAIT_DELIVERED or session.pending_question is None:
+        await message.reply_text(NARRATION_COMING_SOON)
         return
 
     question = session.pending_question
@@ -281,6 +298,29 @@ async def on_other(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         step.suggested_animal,
     )
     await message.reply_text(format_finale(step))
+    await deliver_portrait(message, chat.id, deps)
+
+
+async def deliver_portrait(message: Message, chat_id: int, deps: Deps) -> None:
+    """Converter stage: send the hybrid portrait, or invite a retry if it failed.
+
+    The phase only advances once Telegram has accepted the photo, so a failed upload
+    (raised to the application's error handler) can be retried with any message.
+    """
+    handoff = deps.sessions.get(chat_id).handoff()
+    try:
+        portrait = await deps.converter.convert(handoff)
+    except ConverterError as exc:
+        logger.error("event=converter_failed chat_id=%s error=%r", chat_id, exc)
+        await message.reply_text(CONVERTER_FAILED)
+        return
+
+    await message.reply_photo(photo=portrait.data, caption=format_caption(handoff.dossier))
+    deps.sessions.deliver_portrait(chat_id)
+    logger.info(
+        "event=portrait_delivered chat_id=%s animal=%r", chat_id, handoff.dossier.suggested_animal
+    )
+    await message.reply_text(NARRATION_COMING_SOON)
 
 
 async def log_error(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
