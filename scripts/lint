@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+# Lint and check formatting. Use `scripts/lint --fix` to apply fixes.
+set -euo pipefail
+cd "$(dirname "$0")/.."
+if [[ "${1:-}" == "--fix" ]]; then
+  uv run ruff check --fix .
+  uv run ruff format .
+else
+  uv run ruff check .
+  uv run ruff format --check .
+fi
